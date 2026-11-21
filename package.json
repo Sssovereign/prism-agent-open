@@ -18,7 +18,7 @@
     "migrate": "node -e \"const{Db,defaultDbPath}=await import(String.raw`./dist/src/storage/db.js`);const{archiveLegacyMock}=await import(String.raw`./dist/src/storage/legacy.js`);const{migrate,defaultMigrationsDir}=await import(String.raw`./dist/src/storage/migrate.js`);const db=new Db(defaultDbPath(process.env.DEBATE_DATA_DIR||String.raw`./.data`));archiveLegacyMock(db);console.log(migrate(db,defaultMigrationsDir()));db.close()\" --input-type=module",
     "desktop": "electron .",
     "package": "node scripts/installer/build-desktop.mjs",
-    "test:desktop": "node --test desktop/*.test.cjs desktop/updates/*.test.cjs"
+    "test:desktop": "node -e \"require('electron')\" && node --test desktop/*.test.cjs desktop/updates/*.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.81",

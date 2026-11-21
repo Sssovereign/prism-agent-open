@@ -11,11 +11,23 @@ const { createServer } = require('node:http');
 const { checkHostRange, compareHostFiles, createHostBaseline, checkHostBaseline } = require('../../scripts/release/host-gate.cjs');
 const ROOT = join(__dirname, '../..');
 
-// 从不可变发布标签加载全部旧模块，绝不拿本轮 updater 冒充旧宿主。
-function oldUpdater(tag = 'v0.0.5-beta') {
+function legacySourceRoot() {
   // verify 快照位于仓库 .cache 下但不复制 .git；只读向上寻找原仓库标签。
   let repository = process.env.PRISM_LEGACY_SOURCE_ROOT || ROOT;
   while (!existsSync(join(repository, '.git')) && dirname(repository) !== repository) repository = dirname(repository);
+  return repository;
+}
+
+function hasLegacyTag(tag) {
+  try {
+    execFileSync('git', ['-C', legacySourceRoot(), 'rev-parse', '--verify', '--quiet', `${tag}^{commit}`], { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
+// 从不可变发布标签加载全部旧模块，绝不拿本轮 updater 冒充旧宿主。
+function oldUpdater(tag) {
+  const repository = legacySourceRoot();
   const cache = new Map();
   function load(file) {
     if (cache.has(file)) return cache.get(file).exports;
@@ -38,7 +50,12 @@ test('发布范围不能放宽最低宿主，未知版本和排除构建宿主�
   assert.throws(() => checkHostRange({ ...args, hostVersion: '0.0.5-beta' }), /MUST_MATCH/);
 });
 
-test('真实0.1.0更新器：新业务版本默认继承基线，两平台仅下载小包并通过应用前复核', async () => {
+test('真实0.1.0更新器：新业务版本默认继承基线，两平台仅下载小包并通过应用前复核', async t => {
+  const tag = 'v0.1.0-beta';
+  if (!hasLegacyTag(tag)) {
+    t.skip(`缺少 ${tag} 历史源码；可设置 PRISM_LEGACY_SOURCE_ROOT 指向含该标签的仓库`);
+    return;
+  }
   const root = mkdtempSync(join(tmpdir(), 'prism-010-small-update-'));
   const workspace = join(root, 'workspace'), host = join(root, 'host');
   const { computeWorkspaceCompat } = require('./compat.cjs');
@@ -57,7 +74,7 @@ test('真实0.1.0更新器：新业务版本默认继承基线，两平台仅下
     writeFileSync(join(host, 'build-info.json'), JSON.stringify({ version: '0.1.0-beta', ...compat, updatesPublicKey: publicKeyPem, updatesKeyId: 'test' }));
     const baseline = join(root, 'baseline.json');
     writeFileSync(baseline, JSON.stringify(createHostBaseline(join(host, 'build-info.json'))));
-    const LegacyUpdater = oldUpdater('v0.1.0-beta');
+    const LegacyUpdater = oldUpdater(tag);
     for (const [platform, arch, installer] of [['darwin', 'arm64', 'Prism-0.1.1-beta-mac-arm64.dmg'], ['win32', 'x64', 'Prism-Setup-0.1.1-beta-win-x64.exe']]) {
       const out = join(root, platform);
       execFileSync(process.execPath, [join(ROOT, 'scripts/release/build-update-pack.mjs'), '--workspace', workspace, '--business-version', '0.1.1-beta', '--update-sequence', '6', '--release-id', 'next-business', '--source-sha', 'a'.repeat(40), '--platform', platform, '--arch', arch, '--host-build-info', join(host, 'build-info.json'), '--host-baseline', baseline, '--key', key, '--key-id', 'test', '--out', out], { stdio: 'pipe' });
@@ -155,13 +172,12 @@ test('兼容基线拒绝运行时、依赖、迁移和公钥变化，不能借�
 });
 
 test('真实v0.0.5 updater：006旧字段门禁→完整安装入口，未知capability反而error', async t => {
-  let PrismUpdater;
-  try { PrismUpdater = oldUpdater(); } catch (error) {
-    if (String(error.stderr).match(/not a git repository|invalid object name|unknown revision|bad object|does not exist/i)) {
-      t.skip('缺少 v0.0.5-beta 历史源码；设置 PRISM_LEGACY_SOURCE_ROOT 后重新验证旧宿主协议'); return;
-    }
-    throw error;
+  const tag = 'v0.0.5-beta';
+  if (!hasLegacyTag(tag)) {
+    t.skip(`缺少 ${tag} 历史源码；可设置 PRISM_LEGACY_SOURCE_ROOT 指向含该标签的仓库`);
+    return;
   }
+  const PrismUpdater = oldUpdater(tag);
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   for (const [platform, arch, installer] of [['darwin', 'arm64', 'Prism-0.0.6-beta-mac-arm64.dmg'], ['win32', 'x64', 'Prism-Setup-0.0.6-beta-win-x64.exe']]) {
     const dir = mkdtempSync(join(tmpdir(), 'prism-old-host-'));
