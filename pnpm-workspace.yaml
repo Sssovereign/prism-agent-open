@@ -1,0 +1,22 @@
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  '@google/genai': true
+  esbuild: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core@1.5.1'
+  - '@earendil-works/pi-ai@1.5.1'
+  - '@earendil-works/pi-codemode@1.5.1'
+  - '@earendil-works/pi-coding-agent@1.5.1'
+  - '@earendil-works/pi-mcp@1.5.1'
+  - '@earendil-works/pi-schema@1.5.1'
+  - '@earendil-works/pi-telemetry@1.5.1'
+  - '@earendil-works/pi-tui@1.5.1'
+  - electron@45.3.3
+
+# Keep security fixes pinned; sandbox-runtime imports the stable zod/v3 subpath.
+overrides:
+  'zod@<4.6.6': 4.6.7
+  'esbuild@<0.28.1': 0.28.2
+  'minimatch@>=7 <11.0.1': 11.0.8

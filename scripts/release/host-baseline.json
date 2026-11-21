@@ -1,0 +1,28 @@
+{
+  "baselineVersion": 1,
+  "hostVersion": "0.1.5-beta",
+  "electronVersion": "45.3.3",
+  "sourceSha": "c68f11528799729a4012cf84c2583b7b37b2bc4a",
+  "runtimeCompatibilityId": "node24.75468df47ff9.m6565fe0b",
+  "productionDependenciesHash": "75468df47ff9a88c9ca88cf1ebcac33b2fd14b20b10be5f49e87240a5d9b3fcd",
+  "databaseSchemaVersion": 27,
+  "updatesPublicKeySha256": "2dd514be8cdec44b3658314e9ed4c6a884e22fef2fc1ab4ae76a2a8d31815581",
+  "updatesKeyId": "prism-updates-beta",
+  "hostFiles": {
+    "context-menu.cjs": "41e42bb9c35f8e328fd29ba48c0bbce0cf7b5ecf23a721eac6c8c84088bae96c",
+    "directory-picker.cjs": "19fe0a341f5e808db4999c54843b79b2c2ece0ab6f10224cc8c4961ed53f850a",
+    "main.cjs": "dadeea371693c0286d5da928694163307d1b263884372f19c57d5b81743ba89a",
+    "policy.cjs": "f74b05764557af4ff26dc2de5c8989e47d3759d52af1b892bc6cb13c1568b365",
+    "preload.cjs": "67e4aeb7934454ab085b792d2bbfd71c58982687ee59eea3bd989143900176dc",
+    "updates/acceptance.cjs": "27777c003f9e044168ec04b61c900b3b457faa3782cdf757b7b7dba4530c60d0",
+    "updates/compat.cjs": "99e065a0b2f0d6da92c7407b7244e5cba034d08ba958bba12cffd593e24d63ab",
+    "updates/feed.cjs": "2f67566f9fdb8973db726c986cfd95b5e1d755ff4b885523bccfd2117d8f909e",
+    "updates/installer.cjs": "d08ca3a735d91d52964e90c3f8545d595376c921b044b7ff24459d92aade670d",
+    "updates/keys.cjs": "a095cc8bf12a78c88cd781bf9137f5bb513e56fe21dba17c1934b467a4307fa7",
+    "updates/manifest.cjs": "d0a3a88895833aff1995127f160b3f893195f2a32df9be4b1e940426127d71ae",
+    "updates/shellUpdater.cjs": "39f8c95fef26f7224a810a42a2b7b09a594a408d937bc7862c00330ca22708aa",
+    "updates/store.cjs": "1520562c39ea34777184e081360b4f8fd4bcffb1af668d655c99a1cd6728888d",
+    "updates/tar.cjs": "819e594f855a4518932f350b7ca08dc33624b684e8aede4ec1e05debdb173811",
+    "updates/updater.cjs": "3c40eaaaa4a8f89842846c4558500d394155a747f151a2532fad17b70f56d069"
+  }
+}

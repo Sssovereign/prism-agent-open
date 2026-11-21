@@ -1,0 +1,75 @@
+/* Prism eye-care overrides: low-blue-light palettes on top of the pinned upstream palette.
+ * Day (light theme): warm beige surfaces; Night (dark theme): warm near-black surfaces.
+ * Semantic colors (terminal 16, charts, trajectory, diff) are intentionally untouched.
+ * Applied via document.documentElement.dataset.eyeCare = "true" (see preferences.ts). */
+:root[data-eye-care="true"]:not([data-theme="dark"]) {
+  --color-background: #f6f1e2;
+  --color-background-win-alt: #efe9d9;
+  --color-sidebar: #efe8d5;
+  --color-header: #f7f1e1;
+  --color-panel: #f7f1e1;
+  --color-card: #fbf7ea;
+  --color-input: #fbf7ea;
+  --color-popover: #fbf7ea;
+  --color-popover-header: #f6f1e2;
+  --color-tab: #efe8d5;
+  --color-tab-active: #fbf7ea;
+  --color-menu: #fbf7ea;
+  --color-menu-hover: #efe8d5;
+  --color-toast: #fbf7ea;
+  --color-tooltip: #efe8d5;
+  --color-tooltip-tag: #eae2cd;
+  --color-tag: #eae2cd;
+  --color-secondary: #eae2cd;
+  --color-accent: #f3ecd6;
+  --color-find-highlight: #fff3d9;
+  --color-foreground: #3b3527;
+  --color-foreground-subtle: #6b6350;
+  --color-foreground-subtlest: #857c66;
+  --color-remote-foreground-muted: #6b6350;
+  --color-border: rgba(59, 53, 39, 0.14);
+  --color-border-hover: rgba(59, 53, 39, 0.2);
+  --color-hover: rgba(59, 53, 39, 0.05);
+  --color-selected: rgba(59, 53, 39, 0.06);
+  --color-surface: rgba(59, 53, 39, 0.04);
+  --color-surface-hover: rgba(59, 53, 39, 0.07);
+  --color-user-message-bubble: rgba(59, 53, 39, 0.06);
+  --color-workflow-rule: rgba(59, 53, 39, 0.055);
+  --color-workflow-trace: rgba(59, 53, 39, 0.3);
+  --color-workflow-trace-strong: rgba(59, 53, 39, 0.55);
+}
+:root[data-eye-care="true"][data-theme="dark"] {
+  --color-background: #191510;
+  --color-background-win-alt: #241f18;
+  --color-sidebar: #191510;
+  --color-header: #1f1a13;
+  --color-panel: #1f1a13;
+  --color-card: #241f18;
+  --color-input: #241f18;
+  --color-popover: #241f18;
+  --color-popover-header: #1f1a13;
+  --color-tab: #1f1a13;
+  --color-tab-active: #191510;
+  --color-menu: #241f18;
+  --color-menu-hover: #2e2820;
+  --color-toast: #241f18;
+  --color-tooltip: #241f18;
+  --color-tooltip-foreground: #e6ddc8;
+  --color-secondary: #2e2820;
+  --color-primary: #f2ecdb;
+  --color-brand: #f2ecdb;
+  --color-terminal-cursor: #f2ecdb;
+  --color-foreground: #e6ddc8;
+  --color-foreground-subtle: #b3a98f;
+  --color-foreground-subtlest: #968c74;
+  --color-border: rgba(230, 221, 200, 0.1);
+  --color-border-hover: rgba(230, 221, 200, 0.15);
+  --color-hover: rgba(230, 221, 200, 0.05);
+  --color-selected: rgba(230, 221, 200, 0.1);
+  --color-surface: rgba(230, 221, 200, 0.05);
+  --color-surface-hover: rgba(230, 221, 200, 0.1);
+  --color-user-message-bubble: rgba(230, 221, 200, 0.08);
+  --color-workflow-rule: rgba(230, 221, 200, 0.065);
+  --color-workflow-trace: rgba(230, 221, 200, 0.35);
+  --color-workflow-trace-strong: rgba(230, 221, 200, 0.6);
+}

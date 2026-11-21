@@ -1,0 +1,1241 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:debate-workbench:contracts:v1",
+  "title": "开题版核心边界契约 v1（执行规格v0.2.1已确认基线）",
+  "definitions": {
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "resourceId",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "GrantRef": {
+      "type": "object",
+      "properties": {
+        "grantId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "grantId",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "RoleBindingInput": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "ordinary",
+            "pro",
+            "con",
+            "host"
+          ]
+        },
+        "modelConfigId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "modelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "thinkingLevel": {
+          "type": "string",
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      },
+      "required": [
+        "role",
+        "modelConfigId",
+        "modelId"
+      ],
+      "additionalProperties": false
+    },
+    "CreateRun": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "conversationId": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "problemVersionId": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "mode": {
+              "const": "ordinary"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ResourceRef"
+              },
+              "minItems": 0
+            },
+            "grants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/GrantRef"
+              },
+              "minItems": 0
+            },
+            "agents": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "const": "ordinary"
+                  },
+                  "modelConfigId": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                  },
+                  "modelId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "thinkingLevel": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "minimal",
+                      "low",
+                      "medium",
+                      "high",
+                      "xhigh",
+                      "max"
+                    ]
+                  }
+                },
+                "required": [
+                  "role",
+                  "modelConfigId",
+                  "modelId"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "limitsProfile": {
+              "const": "standard-v1"
+            }
+          },
+          "required": [
+            "conversationId",
+            "problemVersionId",
+            "mode",
+            "resources",
+            "grants",
+            "agents",
+            "limitsProfile"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "conversationId": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "problemVersionId": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            "mode": {
+              "const": "debate"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ResourceRef"
+              },
+              "minItems": 0
+            },
+            "grants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/GrantRef"
+              },
+              "minItems": 0
+            },
+            "agents": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "$ref": "#/definitions/RoleBindingInput"
+              },
+              "allOf": [
+                {
+                  "contains": {
+                    "type": "object",
+                    "properties": {
+                      "role": {
+                        "const": "pro"
+                      }
+                    },
+                    "required": [
+                      "role"
+                    ]
+                  }
+                },
+                {
+                  "contains": {
+                    "type": "object",
+                    "properties": {
+                      "role": {
+                        "const": "con"
+                      }
+                    },
+                    "required": [
+                      "role"
+                    ]
+                  }
+                },
+                {
+                  "contains": {
+                    "type": "object",
+                    "properties": {
+                      "role": {
+                        "const": "host"
+                      }
+                    },
+                    "required": [
+                      "role"
+                    ]
+                  }
+                }
+              ]
+            },
+            "limitsProfile": {
+              "const": "standard-v1"
+            },
+            "rounds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            }
+          },
+          "required": [
+            "conversationId",
+            "problemVersionId",
+            "mode",
+            "resources",
+            "grants",
+            "agents",
+            "limitsProfile",
+            "rounds"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "description": "业务层还须校验debate角色恰为pro/con/host且各唯一，以及所有引用归属。"
+    },
+    "ModelParameters": {
+      "type": "object",
+      "properties": {
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000000
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "thinkingMode": {
+          "type": "string",
+          "enum": [
+            "off",
+            "on",
+            "auto"
+          ]
+        },
+        "contextWindow": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 4096,
+          "maximum": 2000000
+        },
+        "thinkingLevel": {
+          "type": "string",
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "advanced": {
+          "$ref": "#/definitions/ModelAdvancedOptions"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "ModelEntryInput": {
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "parameters": {
+          "$ref": "#/definitions/ModelParameters"
+        }
+      },
+      "required": [
+        "modelId",
+        "displayName",
+        "enabled",
+        "parameters"
+      ],
+      "additionalProperties": false
+    },
+    "ModelConfigInput": {
+      "type": "object",
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "deepseek",
+            "glm-cn-coding",
+            "glm-cn-standard",
+            "glm-global-coding",
+            "glm-global-standard",
+            "qianfan",
+            "kimi",
+            "qwen",
+            "minimax",
+            "xiaomi",
+            "hunyuan",
+            "volcengine",
+            "stepfun",
+            "siliconflow",
+            "openai",
+            "anthropic",
+            "xai",
+            "openrouter",
+            "opencode",
+            "custom"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "baseUrl": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 2048
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelEntryInput"
+          },
+          "minItems": 1
+        },
+        "protocol": {
+          "type": "string",
+          "enum": [
+            "openai-completions",
+            "anthropic-messages"
+          ]
+        },
+        "searchEnabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "preset",
+        "name",
+        "baseUrl",
+        "models"
+      ],
+      "additionalProperties": false
+    },
+    "CredentialInput": {
+      "type": "object",
+      "properties": {
+        "apiKey": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "apiKey"
+      ],
+      "additionalProperties": false
+    },
+    "SupplementInput": {
+      "type": "object",
+      "properties": {
+        "clientMessageId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "kind": {
+          "const": "supplement"
+        },
+        "resourceRefs": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          }
+        }
+      },
+      "required": [
+        "clientMessageId",
+        "content",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "ApprovalDecision": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        },
+        "paramsHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "decision",
+        "paramsHash"
+      ],
+      "additionalProperties": false
+    },
+    "ContextManifest": {
+      "type": "object",
+      "properties": {
+        "resourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "minItems": 0
+        },
+        "publicEvidenceCursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "visibleMessageSeq": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "privateCheckpointRef": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "promptVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "skillVersions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "hash": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              }
+            },
+            "required": [
+              "id",
+              "version",
+              "hash"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "resourceRefs",
+        "publicEvidenceCursor",
+        "visibleMessageSeq",
+        "privateCheckpointRef",
+        "promptVersion",
+        "skillVersions"
+      ],
+      "additionalProperties": false
+    },
+    "Limits": {
+      "type": "object",
+      "properties": {
+        "runTimeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "phaseTimeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "toolTimeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxModelRequests": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxToolSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxToolOutputBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxArtifactBytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "runTimeoutMs",
+        "phaseTimeoutMs",
+        "toolTimeoutMs",
+        "maxModelRequests",
+        "maxToolSteps",
+        "maxOutputTokens",
+        "maxToolOutputBytes",
+        "maxArtifactBytes"
+      ],
+      "additionalProperties": false
+    },
+    "Capability": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 1
+        },
+        "resourceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "tool",
+        "version",
+        "operations",
+        "resourceRefs"
+      ],
+      "additionalProperties": false
+    },
+    "TaskSpec": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": "v1"
+        },
+        "projectId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phaseTaskId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "attemptId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "ordinary",
+            "pro",
+            "con",
+            "host"
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "ordinary",
+            "debate"
+          ]
+        },
+        "phaseKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "roundNo": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "problemVersion": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "modelBindingRef": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "contextManifest": {
+          "$ref": "#/definitions/ContextManifest"
+        },
+        "resourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "minItems": 0
+        },
+        "workspaceGrantRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/GrantRef"
+          },
+          "minItems": 0
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          },
+          "minItems": 0
+        },
+        "limits": {
+          "$ref": "#/definitions/Limits"
+        },
+        "sandboxPolicyRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "deliverySchemaRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "projectId",
+        "runId",
+        "phaseTaskId",
+        "attemptId",
+        "role",
+        "mode",
+        "phaseKey",
+        "roundNo",
+        "problemVersion",
+        "objective",
+        "modelBindingRef",
+        "contextManifest",
+        "resourceRefs",
+        "workspaceGrantRefs",
+        "capabilities",
+        "limits",
+        "sandboxPolicyRef",
+        "deliverySchemaRef"
+      ],
+      "additionalProperties": false
+    },
+    "RunEvent": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": "v1"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "runId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "run.created",
+            "run.started",
+            "run.phase_changed",
+            "run.status_changed",
+            "agent.started",
+            "agent.message_delta",
+            "agent.message_committed",
+            "agent.failed",
+            "tool.proposed",
+            "tool.started",
+            "tool.result",
+            "approval.requested",
+            "approval.decided",
+            "approval.expired",
+            "evidence.published",
+            "artifact.created",
+            "publication.conflict",
+            "usage.recorded",
+            "message.accepted",
+            "message.consumed",
+            "run.summarize_requested",
+            "run.cancel_requested",
+            "run.ended",
+            "attempt.reconciled",
+            "workspace.changed",
+            "run.retry_scheduled",
+            "run.retry_finished"
+          ]
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "public",
+            "owner",
+            "role_private",
+            "audit"
+          ]
+        },
+        "phaseTaskId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attemptId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "eventId",
+        "runId",
+        "seq",
+        "at",
+        "type",
+        "visibility",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "ToolResult": {
+      "type": "object",
+      "properties": {
+        "toolCallId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "denied",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "output": {
+          "type": "object"
+        },
+        "resourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "minItems": 0
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "artifactIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "toolCallId",
+        "status",
+        "output",
+        "resourceRefs",
+        "evidenceIds",
+        "artifactIds",
+        "errorCode",
+        "truncated",
+        "retryable"
+      ],
+      "additionalProperties": false
+    },
+    "TaskDelivery": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100000
+        },
+        "argumentIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "artifactIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "unknowns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "summary",
+        "argumentIds",
+        "evidenceIds",
+        "artifactIds",
+        "unknowns"
+      ],
+      "additionalProperties": false,
+      "description": "引用必须属于本phase/run且获准。报告阶段另校验Report及实际产物；普通纯文本任务允许无文件，用户要求文件时必须有产物。"
+    },
+    "ReportClaim": {
+      "type": "object",
+      "properties": {
+        "claimId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "stance": {
+          "type": "string",
+          "enum": [
+            "support",
+            "oppose",
+            "neutral"
+          ]
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "respondsToIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "uncertainties": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "claimId",
+        "text",
+        "stance",
+        "evidenceIds",
+        "respondsToIds",
+        "uncertainties"
+      ],
+      "additionalProperties": false
+    },
+    "Report": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": "v1"
+        },
+        "problemVersionId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "minItems": 0
+        },
+        "consensus": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "minItems": 0
+        },
+        "disagreements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "minItems": 0
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReportClaim"
+          },
+          "minItems": 0
+        },
+        "risks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "minItems": 0
+        },
+        "unknowns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "minItems": 0
+        },
+        "conditionalConclusion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000
+        },
+        "changeConditions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10000
+          },
+          "minItems": 0
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "artifactIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "minItems": 0
+        },
+        "partial": {
+          "type": "boolean"
+        },
+        "completionReason": {
+          "type": "string",
+          "enum": [
+            "full",
+            "early_summary"
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "problemVersionId",
+        "scope",
+        "sources",
+        "consensus",
+        "disagreements",
+        "claims",
+        "risks",
+        "unknowns",
+        "conditionalConclusion",
+        "changeConditions",
+        "evidenceRefs",
+        "artifactIds",
+        "partial",
+        "completionReason"
+      ],
+      "additionalProperties": false
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "details": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      },
+      "required": [
+        "error",
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    "ModelAdvancedOptions": {
+      "type": "object",
+      "properties": {
+        "smartConfig": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "boolean"
+        },
+        "thinkingLevels": {
+          "type": "array",
+          "maxItems": 7,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "off",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "thinkingParameterMap": {
+          "type": "object",
+          "maxProperties": 7
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

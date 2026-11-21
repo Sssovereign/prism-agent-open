@@ -1,0 +1,27 @@
+/* Prism readability overrides for the pinned upstream palette.
+ * Use opaque text colors so nested cards do not multiply text transparency.
+ * Keep primary / secondary / tertiary hierarchy, plus intentional disabled states.
+ */
+:root:not([data-theme="dark"]) {
+  --color-foreground: #262626;
+  --color-foreground-subtle: #525252;
+  --color-foreground-subtlest: #666666;
+  --color-success: #187437;
+  --color-destructive: #c62828;
+  --color-warning: #9a5100;
+  --animated-gradient-text-strong: var(--color-foreground);
+  --animated-gradient-text-soft: var(--color-foreground-subtlest);
+}
+:root[data-theme="dark"] {
+  --color-foreground: #e5e5e5;
+  --color-destructive-foreground: #161616;
+  --color-foreground-subtle: #b8b8b8;
+  --color-foreground-subtlest: #a3a3a3;
+  --animated-gradient-text-strong: var(--color-foreground);
+  --animated-gradient-text-soft: var(--color-foreground-subtlest);
+}
+/* Browsers otherwise apply their own placeholder color or extra transparency. */
+input::placeholder, textarea::placeholder {
+  color: var(--color-foreground-subtlest);
+  opacity: 1;
+}

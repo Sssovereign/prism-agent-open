@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>会话消息轨 · ZCode 复刻校准页</title>
+  <style>
+    :root {
+      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    html, body { margin: 0; padding: 0; background: #161616; }
+    /* 校准渲染：IAB 视口 dpr=1，用 zoom:2 复现原 2x 截图的字形栅格 */
+    body { zoom: 2; }
+    .stage {
+      position: relative;
+      width: 407px;
+      height: 201px;
+      background: #161616;
+      overflow: hidden;
+      font-family: var(--font-ui);
+    }
+    /* 原截图左缘的环境竖条（相邻窗口边缘，非组件一部分） */
+    .win-edge { position: absolute; left: 0; top: 0; bottom: 0; width: 5.5px; background: #292a28; }
+    /* 「已执行 7 命令」pill */
+    .pill {
+      position: absolute; left: 171px; top: 10px; height: 20px;
+      display: flex; align-items: center; gap: 11px;
+      color: #888888; font: 400 14px/20px var(--font-ui);
+    }
+    .pill svg { width: 13px; height: 13px; display: block; color: #888888; }
+    /* 组件在 ≥864px 会话容器查询内才显示；舞台仅 407px 宽，强制显示以对齐截图。
+       !important：组件 scoped 样式由 vite 运行时注入、晚于本静态表，同特异性会覆盖 */
+    .stage .turn-nav { opacity: 1 !important; visibility: visible !important; transform: none !important; }
+    /* 轨内层 left-3(12px)：舞台含 5.5px 窗缘 → 线左 17.5；滚动层高 88px，
+       top:85.5px 经 translateY(-50%) 得层顶 41.5，L1 线顶 = 41.5+4(内衬)+4(按钮内) = 49.5 */
+    .stage .tn-scroll { left: 17.5px !important; top: 85.5px !important; }
+    /* 校准页可能处于后台：CSS 动画时钟冻结会把入场动画钉在 0%（translate(-6px)），禁用以取终态 */
+    .stage .tn-enter { animation: none !important; }
+    /* 底部被裁切的状态行残片（仅露 2px 字形顶） */
+    .status-clip {
+      position: absolute; left: 59.5px; top: 43.5px; width: 324px; height: 137.5px;
+      overflow: hidden; pointer-events: none; z-index: 7;
+    }
+    .status-frag {
+      position: absolute; left: 111.5px; top: 132.5px; height: 20px;
+      display: flex; align-items: center; gap: 11px;
+      color: #858585; font: 400 14px/20px var(--font-ui);
+    }
+    .status-frag svg { width: 13px; height: 13px; display: block; color: #858585; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/demo/rail-main.ts"></script>
+</body>
+</html>

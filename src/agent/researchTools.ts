@@ -1,0 +1,5 @@
+import type { ToolSpec } from './toolExec.js';
+export const RESEARCH_TOOL_SPECS: ToolSpec[] = [
+  { name: 'research_read', description: '按需分段读取本次固定视野内的保存原文或评审意见。offset是从0开始的UTF-16字符位置，limit默认2000、最多8000；nextOffset非空时可继续。hash对应完整保存原文，contentTruncated说明本次只返回片段。', effect: 'read', highImpact: () => false, parameters: { type: 'object', required: ['recordId'], additionalProperties: false, properties: { recordId: { type: 'string', maxLength: 100 },offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:8000} } } },
+  { name: 'research_search', description: '在本次固定视野搜索保存资料，返回匹配附近的有限原文片段。query="*"分页列目录；offset是从0开始的结果位置，limit默认10、最多20，nextOffset可继续。不进行互联网搜索。', effect: 'read', highImpact: () => false, parameters: { type: 'object', required: ['query'], additionalProperties: false, properties: { query: { type: 'string', maxLength: 400 },offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:20} } } },
+];

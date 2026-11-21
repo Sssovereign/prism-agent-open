@@ -1,0 +1,52 @@
+{
+  "name": "prism-agent",
+  "version": "0.2.0-beta",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "check": "vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.server.json",
+    "build": "npm run check && vite build && tsc -p tsconfig.server.json && node -e \"require('fs').cpSync('src/storage/migrations','dist/src/storage/migrations',{recursive:true})\"",
+    "test": "tsc -p tsconfig.server.json && node -e \"require('fs').cpSync('src/storage/migrations','dist/src/storage/migrations',{recursive:true})\" && node --test dist/tests/*.test.js",
+    "verify": "node scripts/verify-project.mjs",
+    "start": "node dist/src/server.js",
+    "dev": "pnpm run build && pnpm start",
+    "user:create": "node scripts/create-user.mjs",
+    "migrate": "node -e \"const{Db,defaultDbPath}=await import(String.raw`./dist/src/storage/db.js`);const{archiveLegacyMock}=await import(String.raw`./dist/src/storage/legacy.js`);const{migrate,defaultMigrationsDir}=await import(String.raw`./dist/src/storage/migrate.js`);const db=new Db(defaultDbPath(process.env.DEBATE_DATA_DIR||String.raw`./.data`));archiveLegacyMock(db);console.log(migrate(db,defaultMigrationsDir()));db.close()\" --input-type=module",
+    "desktop": "electron .",
+    "package": "node scripts/installer/build-desktop.mjs",
+    "test:desktop": "node --test desktop/*.test.cjs desktop/updates/*.test.cjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.81",
+    "@earendil-works/pi-ai": "1.5.1",
+    "@earendil-works/pi-coding-agent": "1.5.1",
+    "@fastify/multipart": "^10.1.8",
+    "@fastify/static": "10.1.11",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "electron-updater": "6.6.2",
+    "fastify": "5.12.7",
+    "katex": "^0.19.1",
+    "markdown-it": "15.0.3",
+    "mermaid": "^12.3.0",
+    "pinyin-pro": "^3.29.5",
+    "shiki": "^4.6.0",
+    "vue": "3.5.44"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@vitejs/plugin-vue": "6.0.10",
+    "electron": "45.3.3",
+    "electron-builder": "26.18.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vue-tsc": "3.3.14"
+  },
+  "main": "desktop/main.cjs",
+  "description": "棱镜 Prism 本机 Agent 桌面工作台",
+  "author": "Prism"
+}

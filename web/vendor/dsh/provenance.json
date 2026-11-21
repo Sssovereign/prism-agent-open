@@ -1,0 +1,19 @@
+{
+  "upstream": "DeepSeek Harness",
+  "version": "0.2.2-rc.2",
+  "priorReferenceVersion": "0.2.2-rc.1",
+  "priorReferenceDirectory": "Local upstream reference archive (excluded from public export)",
+  "versionNote": "The requested rc.1 is preserved in the prior reference. The installed application archive actually contains rc.2 packages; newly extracted files are not rc.1.",
+  "license": "MIT",
+  "source": "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar",
+  "referenceDirectory": "Local upstream reference archive (excluded from public export)",
+  "adapted": [
+    "StatsPills.tsx",
+    "StatsPills.module.css",
+    "stat-dialog.ts",
+    "stat-dialog.module.css",
+    "ContextMeter.tsx",
+    "ContextMeter.module.css"
+  ],
+  "changes": "Vue adaptation, 13px main reading, typed nullable accounting, explicit last-request context, keyboard focus handling; no upstream application code executed."
+}
