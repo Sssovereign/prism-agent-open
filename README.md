@@ -2,8 +2,9 @@
 
 **棱镜**是一个本机优先的 Agent 工作台：既能像常规 Agent 一样执行任务，也能用结构化辩论与独立评审辅助决策。运行数据、账号与凭据全部保存在本机，模型调用走用户自己配置的凭据。
 
-- 桌面安装包：[公开发行仓](https://github.com/Sssovereign/prism-agent-releases/releases)（macOS Apple Silicon / Windows x64）
-- 本仓库为可构建源码快照，完整开发历史保留在私有仓库；图标采用可追溯的上游发布包
+- **当前版本 0.2.2-beta**（2026-11-23）：[macOS Apple Silicon](https://github.com/Sssovereign/prism-agent-open/releases/download/v0.2.2-beta/Prism-0.2.2-beta-mac-arm64.dmg) · [Windows x64](https://github.com/Sssovereign/prism-agent-open/releases/download/v0.2.2-beta/Prism-Setup-0.2.2-beta-win-x64.exe) · [发行说明](https://github.com/Sssovereign/prism-agent-open/releases/tag/v0.2.2-beta) · [全部版本](../../releases)
+- 源码与安装包自本版起在同一个仓发布；旧发行仓 `prism-agent-releases` 保留历史版本与 0.2.2 过渡附件
+- 本仓库 tag 即对应版本的源码快照（如 [v0.2.2-beta](../../tree/v0.2.2-beta)）；完整开发历史保留在私有仓库，图标采用可追溯的上游发布包
 
 ## 三种工作模式
 
