@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {buildProductApp} from '../src/app.js';
 import {clearLoginFailures} from '../src/auth/routes.js';
+import {saveAttachment} from '../src/agent/attachments.js';
 async function fixture(t:{after(fn:()=>unknown):unknown}) {
  const dir=mkdtempSync(join(tmpdir(),'prism-research-api-')),fx=buildProductApp(dir,{serveWeb:false});
  t.after(async()=>{await fx.app.close();clearLoginFailures();rmSync(dir,{recursive:true,force:true});});
@@ -22,7 +23,7 @@ async function fixture(t:{after(fn:()=>unknown):unknown}) {
  fx.supervisor.startAttempt=(run,id)=>{fx.db.db.prepare("UPDATE runs SET status='running' WHERE id=?").run(run);fx.db.db.prepare("UPDATE attempts SET status='running' WHERE id=?").run(id);fx.db.db.prepare("UPDATE phase_tasks SET status='running' WHERE active_attempt_id=?").run(id);};
  const choice={modelConfigId:configId,modelId:'fixture'},payload={mode:'jury',objective:'API研究议题',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:[{title:'合成资料',content:'固定原文'}],subject:{title:'API验收被评对象',content:'固定原文'},criteria:[{id:'s1',text:'证据充分',mustHave:false}]};
  const create=()=>fx.app.inject({method:'POST',url:`/api/v1/projects/${pid}/research`,headers,payload});
- return {fx,dir,pid,uid,headers,payload,create};
+ return {fx,dir,pid,uid,headers,payload,create,configId};
 }
 test('research API: 登录、CSRF、账号边界及非法模式',async t=>{
  const h=await fixture(t);
@@ -33,6 +34,28 @@ test('research API: 登录、CSRF、账号边界及非法模式',async t=>{
  const other=await h.fx.app.inject({method:'POST',url:'/api/v1/auth/register',payload:{username:'research-other',password:'SyntheticCheck2026!',confirmation:'SyntheticCheck2026!'}});
  assert.equal((await h.fx.app.inject({url:`/api/v1/runs/${runId}/research`,headers:{cookie:String(other.headers['set-cookie']).split(';')[0]!}})).statusCode,404);
  assert.equal((await h.fx.app.inject({url:`/api/v1/runs/${runId}/research/export`})).statusCode,401);
+});
+
+test('research API: 显式附件冻结元数据并携带ordinaryTools能力，越权/重复附件同形拒绝',async t=>{
+ const h=await fixture(t);
+ const png=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.alloc(16,0x7f)]);
+ const att=saveAttachment(h.fx.db,h.dir,h.uid,'截图.png',png);
+ // 携带图片须全角色视觉（创建前预检）：夹具模型声明image能力
+ h.fx.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({advanced:{image:true}}),h.configId);
+ const created=await h.fx.app.inject({method:'POST',url:`/api/v1/projects/${h.pid}/research`,headers:h.headers,payload:{...h.payload,attachmentIds:[att.id]}});
+ assert.equal(created.statusCode,201,created.body);
+ const snap=JSON.parse((h.fx.db.db.prepare('SELECT config_snapshot_json FROM runs WHERE id=?').get(created.json().data.runId) as {config_snapshot_json:string}).config_snapshot_json) as {researchCapabilities?:{ordinaryTools?:boolean};researchAttachments?:Array<{id:string;mime:string;displayName:string}>};
+ assert.equal(snap.researchCapabilities?.ordinaryTools,true);
+ assert.deepEqual(snap.researchAttachments?.map(a=>({id:a.id,mime:a.mime,displayName:a.displayName})),[{id:att.id,mime:'image/png',displayName:'截图.png'}]);
+ assert.ok(!created.body.includes(png.toString('base64').slice(0,32)),'响应不得携带附件base64');
+ // 重复附件：整体拒绝（400），不留半成品run
+ const dup=await h.fx.app.inject({method:'POST',url:`/api/v1/projects/${h.pid}/research`,headers:h.headers,payload:{...h.payload,attachmentIds:[att.id,att.id]}});
+ assert.equal(dup.statusCode,400);
+ // 他人附件：归属校验整体拒绝（404）
+ const other=await h.fx.app.inject({method:'POST',url:'/api/v1/auth/register',payload:{username:'research-attach',password:'SyntheticCheck2026!',confirmation:'SyntheticCheck2026!'}});
+ const foreign=saveAttachment(h.fx.db,h.dir,other.json().data.user.id,'foreign.png',png);
+ const rejected=await h.fx.app.inject({method:'POST',url:`/api/v1/projects/${h.pid}/research`,headers:h.headers,payload:{...h.payload,attachmentIds:[foreign.id]}});
+ assert.equal(rejected.statusCode,404);
 });
 test('research API: 页面与下载消费同一个规范报告，含程序投票和固定视图',async t=>{
  const h=await fixture(t),created=await h.create(),runId=created.json().data.runId;

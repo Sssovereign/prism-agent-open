@@ -450,10 +450,11 @@ async function start() {
   logLine(`Prism ${app.getVersion()} starting`);
   // build-info 由打包脚本写入主进程同目录（app.asar 内 desktop/，asar 读取透明）；开发模式没有该文件，更新身份退化为受限默认
   try { currentBuildInfo = JSON.parse(readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')); } catch { currentBuildInfo = {}; }
-  // 更新源：默认 GitHub 发行仓；仅显式隔离模式允许本地 HTTP feed（供验收演示）
+  // 更新源：默认 GitHub 公开仓（源码+发行一体，2026-11-23 自 prism-agent-releases 迁入）；
+  // 仅显式隔离模式允许本地 HTTP feed（供验收演示）
   const feed = process.env.PRISM_UPDATES_ALLOW_LOCAL_FEED === '1' && (process.env.PRISM_UPDATES_FEED ?? '').startsWith('http://127.0.0.1')
     ? { localFeedUrl: process.env.PRISM_UPDATES_FEED, localFeedAssetBase: process.env.PRISM_UPDATES_FEED_ASSET_BASE ?? '' }
-    : { githubRepo: 'Sssovereign/prism-agent-releases' };
+    : { githubRepo: 'Sssovereign/prism-agent-open' };
   updater = new PrismUpdater({
     userDataDir: dataDir,
     hostIdentity: {

@@ -17,6 +17,34 @@ export interface ResearchModelChoice { modelConfigId: string; modelId: string }
 export interface ResearchSourceInput { title: string; content: string; url?: string }
 /** 共同资料文件引用：用户经UI发起，服务端按授权读取文本并切段入库（资料中的指令不构成权限）。 */
 export interface ResearchSourceFileInput { grantId: string; relativePath: string }
+/** 研究冻结的MCP工具清单条目（发起时用户显式勾选的只读声明工具；执行侧boot与dispatch共用同一份manifest）。 */
+export interface ResearchMcpManifestEntry {
+  qualifiedName: string; serverId: string; serverName: string; toolName: string;
+  description: string; inputSchema: Record<string, unknown>; readOnly: boolean; bindingHash: string;
+}
+/** 研究能力快照（非私有，存 runs.config_snapshot_json.researchCapabilities）。 */
+export interface ResearchCapabilitySnapshot {
+  /** 装配版本：2=静态块先扣+1200预览+url元数据；缺省/1=旧run走v1装配（retry行为不变）。 */
+  assemblyVersion: number;
+  /** 主持/汇总可用 verify_source 核验引证来源。 */
+  hostVerify: boolean;
+  /** 记忆索引已注入（对应private_json.memoryIndex）。 */
+  memory: boolean;
+  mcpTools: ResearchMcpManifestEntry[];
+  /** 冻结的分析方法摘要（正文在private_json，摘要只含名称/哈希/长度）。 */
+  methods: Array<{ name: string; displayName: string; sha256: string; chars: number }>;
+  /** 运行时复用普通Agent能力：true=附带普通项目读取工具/已启用技能/项目规则/附加目录/显式附件；
+   *  旧run与显式固定v1的run缺省=旧受限视图（重试与受控回归不漂移）。 */
+  ordinaryTools?: boolean;
+}
+/** 研究显式图片附件快照（创建时冻结进 runs.config_snapshot_json.researchAttachments；
+ *  只存元数据，运行中经原附件文件读取字节转Pi图片输入，base64不落任何研究表）。 */
+export interface ResearchAttachmentMeta { id: string; mime: string; sizeBytes: number; sha256: string; displayName: string }
+/** 研究私有正文（存 research_runs.private_json；不进 runs.config_snapshot_json，fork 不触碰）。 */
+export interface ResearchPrivateSnapshot {
+  methods: Array<{ name: string; content: string }>;
+  memoryIndex: string | null;
+}
 export interface ResearchClaim {
   key: string; text: string;
   evidence: Array<{ sourceId: string; quote: string }>;

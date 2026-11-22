@@ -139,7 +139,7 @@ function menuKey(event:KeyboardEvent){
  if(event.key==='Escape'){event.preventDefault();closeMenu();return;}
  if(event.key==='Tab'){closeMenu();return;}
  // A native select owns its arrow keys; do not steal them for menu navigation.
-
+ 
  navigateMenu(event,menuRoot.value,'[role=menuitem]:not(:disabled),.ui-select button:not(:disabled)');
 }
 defineExpose({openSearch,load});

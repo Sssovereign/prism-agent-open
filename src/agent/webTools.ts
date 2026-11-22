@@ -136,8 +136,21 @@ export function extractHtmlText(html: string): { title: string | null; text: str
         .replace(/<\/(p|div|section|article|header|footer|li|tr|h[1-6]|blockquote|pre|table|ul|ol)>/gi, '\n')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<[^>]+>/g, ' ');
-    text = decodeEntities(text).replace(/[ \t\r\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    text = decodeEntities(text).replace(/[ \t\r\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+        // 内联标签已折叠成空格，会在中文句内留下"回购或 增持计划"式空格——中文不需要它们，
+        // 且模型逐字复述引文时会在tokenizer层归一化，留着只会让引文校验误拒（2026-11-22实机4/7拒绝皆此因）。
+        .replace(CJK_INLINE_SPACES, '$1');
     return { title: titleMatch ? decodeEntities(titleMatch[1]!).trim().slice(0, 200) : null, text };
+}
+
+/** CJK字符类（含中文标点与全角形式），供HTML清洗与引文校验共用。 */
+const CJK_CLASS = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uff00-\\uffef';
+const CJK_INLINE_SPACES = new RegExp(`([${CJK_CLASS}])[ \\t]+(?=[${CJK_CLASS}])`, 'g');
+
+/** 引文校验侧的归一化：除空格外额外容忍CJK之间的换行（旧记录含行内折行）与nbsp/全角空格。
+ *  只剥空白、不动实质字符——改写、换词、拉丁词间空格仍会被逐字校验拒绝。 */
+export function normalizeQuoteText(text: string): string {
+    return text.replace(new RegExp(`([${CJK_CLASS}])[ \\t\\r\\n\\f\\v\\u00a0\\u3000]+(?=[${CJK_CLASS}])`, 'g'), '$1');
 }
 
 function decodeEntities(input: string): string {

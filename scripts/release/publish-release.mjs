@@ -1,8 +1,9 @@
 // GitHub 发行发布工具：本机构建产物 → 发行仓 draft → 校验远端大小/摘要 → （显式）发布。
 // 默认 dry-run 只打印计划；--publish 才把 draft 转正式。已发布版本与标签不可覆盖：tag 已存在即失败。
 // 依赖 gh CLI（已认证）。不使用 PAT 内置，不修改源码仓可见性。
-// 用法：node scripts/release/publish-release.mjs --repo <owner>/<name> --tag <tag> --title <标题> \
+// 用法：node scripts/release/publish-release.mjs --repo <owner>/<name> [--tag <tag> --title <标题>] \
 //        --notes-file <说明.md> --assets <文件...> [--prerelease] [--publish]
+// 标题缺省自 tag 派生为「棱镜 Prism <版本>」；显式传入也必须以「棱镜」开头（品牌兜底）。
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -20,6 +21,9 @@ const flag = name => process.argv.includes(name);
 const repo = argOf('--repo');
 const tag = argOf('--tag');
 const title = argOf('--title');
+// 品牌兜底：公开版本列表曾因手传标题丢掉「棱镜」前缀而断层（0.2.0/0.2.1）。
+// 标题缺省自 tag 派生为「棱镜 Prism <版本>」；显式传入必须以「棱镜」开头，否则拒绝发行。
+const resolvedTitle = title ?? (tag && /^v?[0-9]/.test(tag) ? `棱镜 Prism ${tag.replace(/^v/, '')}` : undefined);
 const notesFile = argOf('--notes-file');
 // --assets 后跟随待上传文件列表，至下一个 -- 开头参数为止
 const assets = [];
@@ -35,8 +39,12 @@ const assets = [];
 }
 const publish = flag('--publish');
 const prerelease = !flag('--no-prerelease');
-if (!repo || !tag || !title || !notesFile || !assets.length) {
-  console.error('用法：publish-release.mjs --repo <owner>/<name> --tag <tag> --title <标题> --notes-file <md> --assets <文件...> [--publish]');
+if (!repo || !tag || !resolvedTitle || !notesFile || !assets.length) {
+  console.error('用法：publish-release.mjs --repo <owner>/<name> [--tag <tag> --title <以「棱镜」开头的标题>] --notes-file <md> --assets <文件...> [--publish]');
+  process.exit(2);
+}
+if (!/^棱镜/.test(resolvedTitle)) {
+  console.error(`发行标题必须以「棱镜」开头（品牌兜底；0.2.0/0.2.1 曾因丢前缀在公开版本列表断层）：${resolvedTitle}`);
   process.exit(2);
 }
 if (!/^[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error('REPO_INVALID');
@@ -72,7 +80,7 @@ const gh = (args, input) => execFileSync('gh', args, { encoding: 'utf8', input }
 const local = new Map(assets.map(file => [file, { size: statSync(file).size, sha256: createHash('sha256').update(readFileSync(file)).digest('hex') }]));
 console.log(`发布计划 → ${repo}`);
 console.log(`  tag：${tag}（${publish ? '创建后立即发布' : '保持 draft 待确认'}）  prerelease：${prerelease}`);
-console.log(`  标题：${title}`);
+console.log(`  标题：${resolvedTitle}`);
 for (const [file, meta] of local) console.log(`  附件：${file}（${meta.size} 字节，sha256 ${meta.sha256.slice(0, 16)}…）`);
 if (flag('--dry-run') || (!publish && !flag('--draft'))) {
   console.log('dry-run结束：未创建远端内容；--draft准备草稿，--publish核对后发布。');
@@ -91,7 +99,7 @@ const notes = readFileSync(notesFile, 'utf8');
 const existing = findRelease();
 if (existing && (!existing.draft || !flag('--resume-draft'))) throw new Error('RELEASE_ALREADY_EXISTS: 已有发行不可覆盖；仅 --resume-draft 可继续未发布草稿');
 if (flag('--resume-draft') && !existing) throw new Error('DRAFT_NOT_FOUND');
-if (existing && (existing.name !== title || existing.body !== notes || existing.prerelease !== prerelease)) throw new Error('DRAFT_METADATA_MISMATCH');
+if (existing && (existing.name !== resolvedTitle || existing.body !== notes || existing.prerelease !== prerelease)) throw new Error('DRAFT_METADATA_MISMATCH');
 const allowedNames = new Set(assets.map(file => file.split('/').pop()));
 if (allowedNames.size !== assets.length) throw new Error('DUPLICATE_ASSET_NAME');
 if (existing?.assets?.some(asset => !allowedNames.has(asset.name))) throw new Error('DRAFT_UNEXPECTED_ASSET');
@@ -99,7 +107,7 @@ if (!existing) {
   let tagExists = false;
   try { gh(['api', `repos/${repo}/git/ref/tags/${tag}`]); tagExists = true; } catch (error) { if (!String(error.stderr).includes('404')) throw error; }
   if (tagExists) throw new Error('TAG_ALREADY_EXISTS');
-  const createArgs = ['release', 'create', tag, '--repo', repo, '--title', title, '--notes-file', notesFile, '--draft'];
+  const createArgs = ['release', 'create', tag, '--repo', repo, '--title', resolvedTitle, '--notes-file', notesFile, '--draft'];
   if (prerelease) createArgs.push('--prerelease');
   gh(createArgs);
 }

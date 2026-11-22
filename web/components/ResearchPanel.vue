@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import {onMounted,onBeforeUnmount,ref,watch,computed,nextTick} from 'vue';
+import {onMounted,onBeforeUnmount,ref,watch,computed,nextTick,withDefaults} from 'vue';
 import type {CriterionEvaluation,ResearchObjectionTarget,ResearchSubject,ResearchView,ResearchRecord,ResearchSubmission,ResearchReport} from '../../contracts/research';
 import {v1} from '../api';
 import MarkdownText from './MarkdownText.vue';
 import ModeIcon from './ModeIcon.vue';
 import UiIcon from './UiIcon.vue';
 import ResearchObjectionForm from './ResearchObjectionForm.vue';
+import ResearchRail from './ResearchRail.vue';
+import type {ResearchRailItem} from './ResearchRail.vue';
 import {t} from '../ui/i18n/index';
-import {phaseNavLabel,claimTargetIndex,speechSummary,inputViewOf,majorityVerdict,dispositionFields,reviewSubjectFor,storedClaims,type ClaimTarget} from '../view-model/research';
-const props=defineProps<{runId:string;status:string;mode:'debate'|'jury';busy:boolean;failure?:string;objective?:string}>();
+import {phaseNavLabel,phaseAtScroll,railGroupKey,claimTargetIndex,speechSummary,inputViewOf,majorityVerdict,dispositionFields,reviewSubjectFor,storedClaims,type ClaimTarget} from '../view-model/research';
+const props=withDefaults(defineProps<{runId:string;status:string;mode:'debate'|'jury';busy:boolean;failure?:string;objective?:string;withRail?:boolean}>(),{withRail:true});
 export interface ResearchReviewDraft {
  sourceRunId:string;
  objective:string;
@@ -41,8 +43,43 @@ const toolNames=computed<Record<string,string>>(()=>({research_read:t('research.
 const chipState=computed(()=>['created','running'].includes(props.status)?'running':props.status==='succeeded'?'done':['failed','cancelled'].includes(props.status)?'fail':'warn');
 const modeLabel=computed(()=>props.mode==='debate'?t('mode.debate.label'):t('mode.jury.label'));
 // 阶段导航：clickable chips 定位到 data-phase-id 锚点；会话查找（续聊恢复）复用同一锚点。
-const nav=computed(()=>(snapshot.value?.phases??[]).map(phase=>({id:phase.id,label:phaseNavLabel(phase,{role:roleLabel(phase.label),opening:t('research.phase.opening'),round:(round:number)=>t('research.phase.round',{round})}),status:phase.status,sealed:phase.sealed,active:navActive.value===phase.id})));
+const navLabelOf=(phase:Phase)=>phaseNavLabel(phase,{role:roleLabel(phase.label),opening:t('research.phase.opening'),round:(round:number)=>t('research.phase.round',{round})});
+const nav=computed(()=>(snapshot.value?.phases??[]).map(phase=>({id:phase.id,label:navLabelOf(phase),status:phase.status,sealed:phase.sealed,active:navActive.value===phase.id})));
 const navActive=ref('');
+// —— 左缘阶段导航轨（ConversationRail 同款交互）：每阶段一线，换组留空档，点击定位发言卡 ——
+const railItems=computed<ResearchRailItem[]>(()=>{
+ const phases=snapshot.value?.phases??[];const stateTexts=states();
+ return phases.map((phase,index)=>({
+  id:phase.id,label:navLabelOf(phase),
+  stateText:phase.sealed?t('research.sealed'):(stateTexts[phase.status]||phase.status),
+  running:phase.status==='running',
+  excerpt:speechSummary(phase.output)||t('research.rail.noSpeech'),
+  gap:index>0&&railGroupKey(phase)!==railGroupKey(phases[index-1]!),
+ }));
+});
+function onRailLocate(item:ResearchRailItem){navActive.value=item.id;void scrollToAnchor(item.id);}
+// —— 吸顶与停留：导航条滚过原位后吸顶（毛玻璃）；视口锚线（顶下96px，对齐会话轨阈值）之上
+//    最后一个阶段算「当前停留」，随滚动实时更新胶囊与导轨的深浅标识，触底兜底末阶段。 ——
+const navEl=ref<HTMLElement>(),navPinned=ref(false);
+let scroller:HTMLElement|null=null;
+function findScroller():HTMLElement|null{
+ let el=flow.value?.parentElement??null;
+ while(el&&el!==document.body){const oy=getComputedStyle(el).overflowY;if(oy==='auto'||oy==='scroll')return el;el=el.parentElement;}
+ return null;
+}
+// 直读直算（条目仅阶段数级别）：不走 rAF 节流，避免后台标签页动画时钟冻结时停留标识停摆。
+function syncNav(){
+ if(!scroller||!navEl.value||!flow.value)return;
+ const base=scroller.getBoundingClientRect().top;
+ navPinned.value=navEl.value.getBoundingClientRect().top-base<=0.5;
+ const entries=[...flow.value.querySelectorAll<HTMLElement>('[data-phase-id]')].map(el=>({id:el.dataset.phaseId??'',top:el.getBoundingClientRect().top-base}));
+ const atBottom=scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<=4;
+ const current=phaseAtScroll(entries,base+96,atBottom);
+ if(current!==navActive.value)navActive.value=current;
+}
+onMounted(()=>{scroller=findScroller();scroller?.addEventListener('scroll',syncNav,{passive:true});window.addEventListener('resize',syncNav);});
+onBeforeUnmount(()=>{scroller?.removeEventListener('scroll',syncNav);window.removeEventListener('resize',syncNav);});
+watch(()=>snapshot.value?.phases,()=>{void nextTick(syncNav);});
 const claimTargets=computed(()=>claimTargetIndex(snapshot.value?.records??[],phaseTaskId=>{
  const phase=snapshot.value?.phases.find(p=>p.id===phaseTaskId);
  return phase?{label:roleLabel(phase.label),roundNo:phase.roundNo??0}:null;
@@ -188,6 +225,8 @@ watch(()=>[props.runId,props.status],()=>{void load();});onMounted(load);onBefor
 </script>
 <template>
 <article ref="flow" class="research-flow" :class="{ 'has-report': snapshot?.report }" :aria-label="t('research.nav.label')">
+ <!-- 左缘阶段导轨：绝对定位锚定 conversation-region（与 ConversationRail 同几何），随内容滚动保持悬浮。 -->
+ <ResearchRail v-if="withRail&&railItems.length>=2" :items="railItems" :active-id="navActive" @locate="onRailLocate" />
  <header v-if="!snapshot?.report" class="research-head">
   <ModeIcon :mode="mode" class="research-mode-icon" />
   <h2>{{modeLabel}}<span class="tag-mock">{{t('research.experimentTag')}}</span></h2>
@@ -291,7 +330,7 @@ watch(()=>[props.runId,props.status],()=>{void load();});onMounted(load);onBefor
    <ResearchObjectionForm v-if="objectionOpen==='conclusion'" v-model="objectionText" target="conclusion" :running="false" :busy="objectionBusy" :error="objectionError" @submit="submitObjection" @cancel="closeObjection" />
   </footer>
  </section>
- <nav v-if="nav.length" class="phase-nav" :aria-label="t('research.nav.label')">
+ <nav v-if="nav.length" ref="navEl" class="phase-nav" :class="{pinned:navPinned}" :aria-label="t('research.nav.label')">
   <button v-for="item in nav" :key="item.id" type="button" class="phase-nav-chip" :class="{active:navActive===item.id}" :data-state="item.status" @click="navActive=item.id;scrollToAnchor(item.id)">
    <span class="nav-dot"></span>{{item.label}}
   </button>
@@ -434,11 +473,13 @@ watch(()=>[props.runId,props.status],()=>{void load();});onMounted(load);onBefor
 .research-objective{display:flex;flex-direction:column;gap:6px;align-self:flex-end;width:fit-content;max-width:min(100%,576px);min-width:0}
 .research-objective .obj-label{font-size:var(--text-ui-xs);color:var(--fg-subtlest);text-align:right}
 .research-objective .obj-text{padding:10px 16px;border-radius:18px;background:light-dark(#e8f3ff,#213247);color:light-dark(#163354,#e0edff);white-space:pre-wrap;overflow-wrap:anywhere;font-size:var(--text-ui-base);line-height:1.6}
-/* 阶段导航：横向可点chip，点击滚动到对应发言卡并高亮。 */
-.phase-nav{display:flex;gap:6px;flex-wrap:wrap}
+/* 阶段导航：横向可点chip，点击滚动到对应发言卡；滚过原位后吸顶悬浮（毛玻璃，吸顶后加发丝线），
+   当前停留的胶囊以颜色深浅标识（提亮+填充），执行状态仍由圆点表达。 */
+.phase-nav{position:sticky;top:0;z-index:6;display:flex;gap:6px;flex-wrap:wrap;padding:8px 0;margin:-8px 0;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(16px) saturate(1.35);border-bottom:1px solid transparent}
+.phase-nav.pinned{border-bottom-color:var(--border)}
 .phase-nav-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-card);font-size:var(--text-ui-sm);color:var(--fg-subtle);cursor:pointer;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .phase-nav-chip:hover{color:var(--fg);border-color:var(--border-hover)}
-.phase-nav-chip.active{color:var(--fg);border-color:var(--border-hover);background:var(--hover)}
+.phase-nav-chip.active{color:var(--fg);border-color:var(--border-hover);background:var(--hover);font-weight:500}
 .phase-nav-chip .nav-dot{width:6px;height:6px;border-radius:50%;background:var(--fg-subtlest);flex:none}
 .phase-nav-chip[data-state="running"] .nav-dot{background:var(--success)}
 .phase-nav-chip[data-state="succeeded"] .nav-dot{background:var(--color-icon-blue,#508de0)}

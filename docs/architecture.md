@@ -28,7 +28,7 @@ HTTP信封与响应头使用同一请求追踪编号；客户端提供合法编�
 
 `POST /api/v1/project-directory-pickers` 接收 JSON `{}` 并发起宿主目录选择。`POST /api/v1/projects/local` 通过 `folders` 接收 1–10 项，每项包含 `pickerTicket`、`nonce` 和 `access`。旧客户端仍可提交单项 `folder`。创建时按规范路径去重，首个目录设为主要目录，项目和授权在同一事务中写入。响应中的 `grant` 是主要目录授权，`grants` 为有效授权列表。
 
-`GET /api/v1/projects/:id/grants` 的授权视图用 `isPrimary` 标记主要目录。`POST /api/v1/projects/:id/grants/:grantId/primary` 切换主要目录，影响后续任务的默认工作目录。撤销主要授权时会提升最早的剩余有效授权。`Supervisor` 选取主要目录作为普通任务的工作目录，并把有效附加目录传给 runner；runner 用 `workspace_roots` 告知模型可使用的附加路径。授权、既有项目回填及隔离边界见[数据与访问](data-and-access.md#项目目录授权)。
+`GET /api/v1/projects/:id/grants` 的授权视图用 `isPrimary` 标记主要目录。`POST /api/v1/projects/:id/grants/:grantId/primary` 切换主要目录，影响后续任务的默认工作目录。撤销主要授权时会提升最早的剩余有效授权。`Supervisor` 选取主要目录作为普通任务的工作目录，并把有效附加目录传给 runner；runner 用 `workspace_roots` 告知模型可使用的附加路径。授权、既有项目回填及隔离边界见数据与访问。
 
 设置和侧栏共用项目编辑弹窗。读取、选择目录、保存或归档失败时，弹窗使用统一错误横幅，支持复制错误码和请求编号。项目详情读取成功后才能提交修改。取消系统目录选择显示普通状态，过期或失败可重新选择。保存失败时保留弹窗内的编辑内容，结果不确定时提示先核对已保存的配置。运行中的任务阻止归档，停止任务后可再走确认流程。
 
@@ -161,7 +161,7 @@ API：`GET /api/v1/skills`返回技能、诊断和当前账号已安装包；`PO
 
 ## 研究执行链
 
-辩论与独立陪审已接入正式装配。`ResearchCoordinator`负责固定输入、阶段发布屏障、引文／回应校验、幂等事务完成及规范报告；`Supervisor`复用Pi／网关并实施研究工具二次门禁，`researchRoutes`与`ResearchSetup/ResearchPanel`接通API和界面。显式参与者补充历史绑定结构，迁移019不改旧表。完整实现、接口与限制见[研究模式](research-protocol.md)；旧架构提案和隔离原型只证明其对应阶段。
+辩论与独立陪审已接入正式装配。`ResearchCoordinator`负责固定输入、阶段发布屏障、引文／回应校验、幂等事务完成及规范报告；`Supervisor`复用Pi／网关并实施研究工具二次门禁，`researchRoutes`与`ResearchSetup/ResearchPanel`接通API和界面。显式参与者补充历史绑定结构，迁移019不改旧表。完整实现、接口与限制见研究模式；旧架构提案和隔离原型只证明其对应阶段。
 
 侧栏任务状态按需显示12px状态位，灯心与顶部视图图标／项目加号共用距侧栏右边24px的轴线，绿灯表示运行、蓝点表示尚未查看、红点表示失败；绿色呼吸动画在减少动态效果时静止。双击任务名或F2复用现有持久重命名对话框；鼠标单击短暂延迟以区分双击，防止未读筛选先移除任务。
 
@@ -169,9 +169,9 @@ API：`GET /api/v1/skills`返回技能、诊断和当前账号已安装包；`PO
 
 ## 搜索服务扩展
 
-搜索服务以页面与后端共用的[搜索契约](../contracts/search.ts)为准。当前目录包括博查、Tavily、智谱 BigModel、Z.ai、百度千帆、Kimi、DeepSeek、Brave Search、Exa、Serper 和 Perplexity Search。`searchProviders.ts` 管理协议适配，`webTools.ts` 负责 HTTPS 出站。
+搜索服务以页面与后端共用的搜索契约为准。当前目录包括博查、Tavily、智谱 BigModel、Z.ai、百度千帆、Kimi、DeepSeek、Brave Search、Exa、Serper 和 Perplexity Search。`searchProviders.ts` 管理协议适配，`webTools.ts` 负责 HTTPS 出站。
 
-任务优先使用已启用联网搜索的模型接口及其 Key。接口未启用绑定时，查询按该账号「联网搜索」设置执行，可以使用独立搜索 Key，也可以显式引用匹配厂商的模型接口 Key。绑定或引用失效时会提示重新配置。普通任务与研究角色共用搜索可用性判断，研究角色的工具权限见[研究模式](research-protocol.md#执行身份与输入范围)。
+任务优先使用已启用联网搜索的模型接口及其 Key。接口未启用绑定时，查询按该账号「联网搜索」设置执行，可以使用独立搜索 Key，也可以显式引用匹配厂商的模型接口 Key。绑定或引用失效时会提示重新配置。普通任务与研究角色共用搜索可用性判断，研究角色的工具权限见研究模式。
 
 历史协议核对与覆盖范围见首批搜索服务、Kimi 接入和DeepSeek 接入。接口测试使用可控上游，真实供应商搜索验收以工程状态为准。
 

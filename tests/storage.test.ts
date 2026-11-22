@@ -97,7 +97,7 @@ test('025迁移：保留旧审批、引文与检查点，移除无用途摘要�
       INSERT INTO evidence(id,project_id,run_id,resource_version_id,excerpt,excerpt_hash,producer_role,state,created_at,updated_at) VALUES ('e','p','r','rv','保留引文','unused','ordinary','published','t','t');
       INSERT INTO context_checkpoints(id,run_id,attempt_id,conversation_id,input_manifest_hash,summary_text,source_seq,schema_version,prompt_version,policy_version,model_id,state,created_at,updated_at,source_manifest_json) VALUES ('cp','r','a','c','legacy-source-id','保留摘要',1,'cp-v1','p1','v1','fixture','confirmed','t','t','{"keptIds":["old"]}');
     `);
-    assert.deepEqual(migrate(db).applied, [25, 26, 27, 28]);
+    assert.deepEqual(migrate(db).applied, [25, 26, 27, 28, 29]);
     const columns = (table: string) => db.db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
     assert.ok(!columns('approvals').includes('params_hash'));
     assert.ok(!columns('evidence').includes('excerpt_hash'));
@@ -131,11 +131,33 @@ test('027迁移：workspace_grants新增is_primary并把每项目最早未撤销
       INSERT INTO workspace_grants(id,project_id,canonical_root,access,revision,selected_by,excludes_json,created_at,updated_at) VALUES ('g-revoked','p1','/tmp/c','write',1,'u','[]','2019-01-01T00:00:00.000Z','t');
     `);
     db.db.prepare("UPDATE workspace_grants SET revoked_at='2021-06-01T00:00:00.000Z' WHERE id='g-revoked'").run();
-    assert.deepEqual(migrate(db).applied, [27, 28]);
+    assert.deepEqual(migrate(db).applied, [27, 28, 29]);
     const primary = (id: string) => (db.db.prepare('SELECT is_primary FROM workspace_grants WHERE id=?').get(id) as { is_primary: number }).is_primary;
     assert.equal(primary('g-old'), 1, '最早未撤销授权回填为主要');
     assert.equal(primary('g-new'), 0);
     assert.equal(primary('g-revoked'), 0, '已撤销授权不参与回填');
     assert.deepEqual(migrate(db).applied, []);
+  } finally { db.close(); rmSync(dir, {recursive:true,force:true}); }
+});
+
+test('029迁移：research_runs新增private_json私有正文列，可重复执行且不改checksum登记', () => {
+  const dir = temporary(), oldMigrations = join(dir, 'migrations');
+  mkdirSync(oldMigrations);
+  for (const name of readdirSync(defaultMigrationsDir()).filter(name => /^\d{3}_/.test(name) && Number(name.slice(0, 3)) < 29)) {
+    copyFileSync(join(defaultMigrationsDir(), name), join(oldMigrations, name));
+  }
+  const db = new Db(join(dir, 'workbench.sqlite'));
+  try {
+    migrate(db, oldMigrations);
+    const columns = (table: string) => db.db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
+    assert.ok(!columns('research_runs').includes('private_json'), '旧库无该列');
+    assert.deepEqual(migrate(db).applied, [29]);
+    assert.ok(columns('research_runs').includes('private_json'), '029补上私有正文列');
+    // 旧 run 行该列为 NULL，不从设置回填
+    const row = db.db.prepare('SELECT private_json FROM research_runs LIMIT 1').get() as { private_json: string | null } | undefined;
+    if (row) assert.equal(row.private_json, null);
+    const again = migrate(db, defaultMigrationsDir());
+    assert.deepEqual(again.applied, []);
+    assert.equal(db.db.prepare('PRAGMA foreign_key_check').all().length, 0);
   } finally { db.close(); rmSync(dir, {recursive:true,force:true}); }
 });

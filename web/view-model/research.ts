@@ -15,6 +15,22 @@ export function phaseNavLabel(phase: ResearchPhaseLite, labels: { role: string; 
 	return labels.role;
 }
 
+/** 左缘导航轨分组键：开题一对、每个轮次一对；主持与其它阶段按 phaseKey/角色自成组，换组留空档。 */
+export function railGroupKey(phase: ResearchPhaseLite): string {
+	if (phase.phaseKey?.startsWith('opening')) return 'opening';
+	if ((phase.roundNo ?? 0) > 0) return `round:${phase.roundNo}`;
+	return phase.phaseKey ?? phase.role;
+}
+
+/** 滚动停留判定：锚线（视口顶＋阈值）之上最后一个阶段算当前停留；触底兜底最后一个阶段；无条目返回空串。 */
+export function phaseAtScroll(entries: Array<{ id: string; top: number }>, anchorTop: number, atBottom = false): string {
+	if (!entries.length) return '';
+	if (atBottom) return entries[entries.length - 1]!.id;
+	let current = '';
+	for (const entry of entries) if (entry.top <= anchorTop) current = entry.id;
+	return current;
+}
+
 export interface ClaimTarget { phaseId: string | null; roleLabel: string; roundNo: number; claimNo: number; text: string }
 
 /** 已发布主张可以定位到本轮发言或继承记录中的正文。 */
@@ -97,4 +113,50 @@ export function dispositionFields(kind: string): string[] {
 	if (kind === 'trial') return ['scope', 'successCriteria', 'reEvalTrigger'];
 	if (kind === 'defer') return ['missingEvidence', 'howToObtain', 'reDecisionConditions'];
 	return [];
+}
+
+/* ---- 决定草稿归一化：折叠摘要与提交共用同一事实源（后端口径：命题≤2000字、候选2—6项、每项≤500字）。 ---- */
+
+export const DECISION_PROPOSITION_MAX = 2000;
+export const DECISION_CANDIDATE_MAX = 500;
+export const DECISION_CANDIDATES_MIN = 2;
+export const DECISION_CANDIDATES_MAX = 6;
+/** 分析方法上限（与服务端 RESEARCH_METHOD_MAX 同口径；发起时显式挑字段）。 */
+export const RESEARCH_METHOD_MAX = 3;
+
+export interface ResearchDecisionDraft { proposition: string; candidates: Array<{ text: string }> }
+
+export type DecisionIssue =
+	| 'proposition-empty'        // 命题与议题都拿不出非空命题
+	| 'proposition-too-long'     // 命题（显式或回退自议题）超过2000字
+	| 'candidates-insufficient'  // 非空候选不足2项
+	| 'candidates-too-many'      // 非空候选超过6项
+	| 'candidate-too-long';      // 存在超过500字的候选
+
+export interface DecisionNormalization {
+	proposition: string;                 // 提交用命题（trim；显式优先，回退议题）
+	propositionFromObjective: boolean;   // 命题是否回退自议题
+	candidates: Array<{ text: string }>; // trim 剔空后的候选
+	ready: boolean;                      // decisionOn 时能否提交（与后端校验同口径）
+	issues: DecisionIssue[];
+}
+
+/** 归一化决定草稿：显式命题优先、回退议题；候选 trim 剔空；issues 与后端校验同口径。 */
+export function normalizeDecision(decision: ResearchDecisionDraft | null | undefined, objective: string): DecisionNormalization {
+	const rawProposition = decision?.proposition?.trim() ?? '';
+	const topic = objective?.trim() ?? '';
+	const propositionFromObjective = !rawProposition && !!topic;
+	// 回退议题不做静默截断：议题超长时命题置空并标记 issue，要求用户显式写一句短命题
+	const proposition = rawProposition || (topic.length <= DECISION_PROPOSITION_MAX ? topic : '');
+	const candidates = (decision?.candidates ?? [])
+		.map(c => ({ text: (c?.text ?? '').trim() }))
+		.filter(c => c.text.length > 0);
+	const issues: DecisionIssue[] = [];
+	const effective = rawProposition || topic;
+	if (!effective) issues.push('proposition-empty');
+	else if (effective.length > DECISION_PROPOSITION_MAX) issues.push('proposition-too-long');
+	if (candidates.length < DECISION_CANDIDATES_MIN) issues.push('candidates-insufficient');
+	else if (candidates.length > DECISION_CANDIDATES_MAX) issues.push('candidates-too-many');
+	if (candidates.some(c => c.text.length > DECISION_CANDIDATE_MAX)) issues.push('candidate-too-long');
+	return { proposition, propositionFromObjective, candidates, ready: issues.length === 0, issues };
 }

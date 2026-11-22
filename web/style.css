@@ -7,6 +7,8 @@
   --color-blue-50: #eff6ff; --color-blue-300: #93c5fd; --color-blue-700: #1d4ed8;
   --color-yellow-300: #fde047; --color-yellow-600: #ca8a04;
   --ui-font-size: 14px;
+  /* 对话字号随 UI 基准 token 级联（偏好覆盖 --ui-font-size 即同时生效） */
+  --conversation-font-size: var(--ui-font-size);
   --text-ui-base: var(--ui-font-size);
   --text-ui-caption: calc(var(--ui-font-size) - 1px);
   --text-ui-sm: calc(var(--ui-font-size) - 2px);
@@ -249,7 +251,7 @@ html[data-desktop-chrome="win32"] :is(.topbar,.settings-header,.drawer:not(.outp
 }
 .composer:focus-within { border-color: var(--border-hover); }
 .composer textarea {
-  display: block; width: 100%; border: 0; background: transparent; resize: none; font-size: 14px; line-height: 1.5; min-height: 44px; max-height: 320px; padding: 0; color: var(--fg);
+  display: block; width: 100%; border: 0; background: transparent; resize: none; font-size: var(--conversation-font-size); line-height: 1.5; min-height: 44px; max-height: 320px; padding: 0; color: var(--fg);
 }
 .composer textarea:focus { outline: none; }
 .composer textarea::placeholder { color: var(--fg-subtlest); }
@@ -414,8 +416,10 @@ html[data-desktop-chrome="win32"] :is(.topbar,.settings-header,.drawer:not(.outp
 .shell.sb-collapsed .sidebar-resize { display: none; }
 .tb-menu { display: inline-grid; }
 .conversation-region { --conversation-content-width:min(896px, calc(100% - clamp(32px, 8cqw, 96px))); position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-.conversation-region.is-draft { justify-content: center; padding-bottom: 8vh; }
-.conversation-region.is-draft .timeline-scroll { flex: none; overflow: visible; }
+.conversation-region.is-draft { overflow-x: hidden; overflow-y: auto; padding-bottom: 8vh; }
+/* 安全居中：放得下时 auto margin 对分上下留白，放不下时归 0 从顶部起滚（内容裁进区域盒，不再溢出盖顶栏）。 */
+.conversation-region.is-draft .timeline-scroll { flex: none; overflow: visible; margin-top: auto; }
+.conversation-region.is-draft .composer-seat { margin-bottom: auto; }
 .conversation-region.is-draft .composer { max-width: 672px; }
 .conversation-region.is-draft .composer-wrap { padding-top: 0; }
 .empty-state .empty-logo { width: 64px; height: 64px; margin-bottom: 14px; }
@@ -529,7 +533,7 @@ html[data-desktop-chrome="win32"] :is(.topbar,.settings-header,.drawer:not(.outp
 .work-history > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 28px; list-style: none; cursor: pointer; width: fit-content; }
 .work-history > summary::-webkit-details-marker { display: none; }
 
-.turn-message { font-size: 14px; line-height: 1.8; margin: 12px 0 18px; }
+.turn-message { font-size: var(--conversation-font-size); line-height: 1.8; margin: 12px 0 18px; }
 .answer-actions { display: flex; gap: 16px; margin-top: 18px; }
 
 .sb-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

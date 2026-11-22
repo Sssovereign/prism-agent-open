@@ -366,11 +366,17 @@ test('任务列表严格按项目隔离，追问保留会话标题与模型绑�
 test('agent runtime settings: authenticated private persistence, CSRF and strict bounds',async()=>{
  const e=await fixture();try{
  const a=await e.login(),b=await e.login('models-b');
- const defaults=await e.fx.app.inject({url:'/api/v1/agent-settings',headers:a});assert.deepEqual(defaults.json().data,{autoCompaction:true,keepRecentTurns:3,memoryEnabled:true,subagent:DEFAULT_SUBAGENT_SETTINGS,askUserQuestionAutoResolutionEnabled:true});
+ // 研究能力位与预算上限缺省值（设置→研究分区）
+ const researchDefaults={researchMcpTools:true,researchSkillMethods:true,researchMemory:true,researchHostVerify:true,researchModelRequestLimit:240,researchToolRequestLimit:480};
+ const defaults=await e.fx.app.inject({url:'/api/v1/agent-settings',headers:a});assert.deepEqual(defaults.json().data,{autoCompaction:true,keepRecentTurns:3,memoryEnabled:true,subagent:DEFAULT_SUBAGENT_SETTINGS,askUserQuestionAutoResolutionEnabled:true,...researchDefaults});
  const saved=await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload:{autoCompaction:false,keepRecentTurns:2}});assert.equal(saved.statusCode,200);
- assert.deepEqual((await e.fx.app.inject({url:'/api/v1/agent-settings',headers:a})).json().data,{autoCompaction:false,keepRecentTurns:2,memoryEnabled:true,subagent:DEFAULT_SUBAGENT_SETTINGS,askUserQuestionAutoResolutionEnabled:true});
+ assert.deepEqual((await e.fx.app.inject({url:'/api/v1/agent-settings',headers:a})).json().data,{autoCompaction:false,keepRecentTurns:2,memoryEnabled:true,subagent:DEFAULT_SUBAGENT_SETTINGS,askUserQuestionAutoResolutionEnabled:true,...researchDefaults});
  assert.equal((await e.fx.app.inject({url:'/api/v1/agent-settings',headers:b})).json().data.keepRecentTurns,3);
  for(const payload of [{autoCompaction:true,keepRecentTurns:0},{autoCompaction:true,keepRecentTurns:21},{autoCompaction:true,keepRecentTurns:1.5},{autoCompaction:true,keepRecentTurns:2,mcp:true}])assert.equal((await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload})).statusCode,400);
+ // 研究键：合法写入回读；布尔非布尔/越界数字/未知键 400（路由要求 autoCompaction/keepRecentTurns 恒在场）
+ assert.equal((await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload:{autoCompaction:true,keepRecentTurns:3,researchMcpTools:false,researchHostVerify:false,researchModelRequestLimit:200,researchToolRequestLimit:300}})).statusCode,200);
+ const researchRead=await e.fx.app.inject({url:'/api/v1/agent-settings',headers:a});assert.equal(researchRead.json().data.researchMcpTools,false);assert.equal(researchRead.json().data.researchModelRequestLimit,200);assert.equal(researchRead.json().data.researchToolRequestLimit,300);
+ for(const payload of [{autoCompaction:true,keepRecentTurns:3,researchMcpTools:'yes'},{autoCompaction:true,keepRecentTurns:3,researchModelRequestLimit:39},{autoCompaction:true,keepRecentTurns:3,researchModelRequestLimit:401},{autoCompaction:true,keepRecentTurns:3,researchToolRequestLimit:59},{autoCompaction:true,keepRecentTurns:3,researchToolRequestLimit:601},{autoCompaction:true,keepRecentTurns:3,researchModelRequestLimit:80.5},{autoCompaction:true,keepRecentTurns:3,unknownKey:1}])assert.equal((await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload})).statusCode,400);
  const changed={autoCompaction:true,keepRecentTurns:3,subagent:{enabled:false,maxSteps:5,timeoutSeconds:10}};
  assert.equal((await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload:changed})).statusCode,200);
  assert.deepEqual((await e.fx.app.inject({url:'/api/v1/agent-settings',headers:a})).json().data.subagent,changed.subagent);
@@ -382,9 +388,9 @@ test('agent runtime settings: authenticated private persistence, CSRF and strict
 test('agent prompt settings: prompts persist per user, whitespace-only clears, invalid payloads fail closed',async()=>{
  const e=await fixture();try{
  const a=await e.login(),b=await e.login('models-b');
- // 全空 prompts 键被丢弃：保存后响应形状与默认一致
+ // 全空 prompts 键被丢弃：保存后响应形状与默认一致（含研究能力位缺省）
  const cleared=await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload:{autoCompaction:true,keepRecentTurns:3,prompts:{subagent:'   ',compaction:''}}});
- assert.equal(cleared.statusCode,200);assert.deepEqual(cleared.json().data,{autoCompaction:true,keepRecentTurns:3,memoryEnabled:true,subagent:DEFAULT_SUBAGENT_SETTINGS,askUserQuestionAutoResolutionEnabled:true});
+ assert.equal(cleared.statusCode,200);assert.deepEqual(cleared.json().data,{autoCompaction:true,keepRecentTurns:3,memoryEnabled:true,subagent:DEFAULT_SUBAGENT_SETTINGS,askUserQuestionAutoResolutionEnabled:true,researchMcpTools:true,researchSkillMethods:true,researchMemory:true,researchHostVerify:true,researchModelRequestLimit:240,researchToolRequestLimit:480});
  // 合法保存：trim 后回读
  const saved=await e.fx.app.inject({method:'PUT',url:'/api/v1/agent-settings',headers:a,payload:{autoCompaction:true,keepRecentTurns:3,prompts:{mainAppend:' 输出一律用中文 ',subagent:'只查 data/ 目录'} }});
  assert.equal(saved.statusCode,200);assert.deepEqual(saved.json().data.prompts,{mainAppend:'输出一律用中文',subagent:'只查 data/ 目录'});

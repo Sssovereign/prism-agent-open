@@ -51,7 +51,7 @@ export function navigatePromptHistory(
   return { nextIndex, nextValue: entries[nextIndex] ?? '', shouldHandle: true };
 }
 
-// —— promptHistoryStorage ——
+// —— promptHistoryStorage —— 
 
 interface StorageLike {
   getItem(key: string): string | null;

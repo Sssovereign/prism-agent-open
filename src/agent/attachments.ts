@@ -82,6 +82,36 @@ export function loadAttachmentImages(db: Db, userId: string, ids: string[]): { r
     return { rows, images };
 }
 
+/** 研究显式附件按发起时冻结的元数据装载（每个phase启动时执行）：
+ *  重新校验文件存在、归属、字节hash与冻结sha256一致、魔数mime与冻结mime一致、大小一致——
+ *  任一不符即明确失败（不使用被修改或丢失的图片，不静默降级为文本），由launch层落为可重试失败。
+ *  返回的base64只进入attempt私有bootstrap与进程内存，不落任何库表。 */
+export function loadFrozenAttachmentImages(db: Db, userId: string, frozen: Array<{ id: string; mime: string; sizeBytes: number; sha256: string; displayName: string }>): SteerImage[] {
+    const images: SteerImage[] = [];
+    for (const meta of frozen) {
+        const row = rowOf(db, meta.id, userId);
+        let bytes: Buffer;
+        try {
+            bytes = readFileSync(row.internal_path);
+        } catch {
+            throw new ApiError('NOT_FOUND', `附件文件已丢失：${row.display_name}；请重新发起并移除该图片`);
+        }
+        const digest = createHash('sha256').update(bytes).digest('hex');
+        if (digest !== meta.sha256) {
+            throw new ApiError('VALIDATION_FAILED', `附件内容与发起研究时不一致（可能已被修改或替换）：${row.display_name}；请移除该图片后重新上传并发起`);
+        }
+        const mime = sniffImageMime(bytes);
+        if (!mime || mime !== meta.mime) {
+            throw new ApiError('VALIDATION_FAILED', `附件类型与发起研究时不一致：${row.display_name}`);
+        }
+        if (bytes.byteLength !== meta.sizeBytes) {
+            throw new ApiError('VALIDATION_FAILED', `附件大小与发起研究时不一致：${row.display_name}`);
+        }
+        images.push({ mimeType: row.mime, data: bytes.toString('base64') });
+    }
+    return images;
+}
+
 /** 规范化请求中的附件 id 列表：≤10、全为字符串、去空。 */
 export function normalizeAttachmentIds(value: unknown): string[] {
     if (value === undefined || value === null) return [];

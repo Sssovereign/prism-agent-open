@@ -30,6 +30,13 @@ test('webTools: extractHtmlText 数字实体', () => {
     assert.ok(text.includes('Copyright © 2026'));
 });
 
+test('webTools: extractHtmlText 剥除中文句内标签折行空格，保留拉丁词间空格', () => {
+    // 内联标签折叠成空格会在中文句内留下"回购或 增持计划"式空格——模型逐字引文时归一化导致校验误拒
+    const { text } = extractHtmlText('<p>盘后披露超2亿元<a>回购</a>或<em>增持计划</em>公告，<a>光模块</a>表现较弱。iPhone 15 and vivo X200 上市。</p>');
+    assert.ok(text.includes('盘后披露超2亿元回购或增持计划公告，光模块表现较弱。'));
+    assert.ok(text.includes('iPhone 15 and vivo X200 上市。'));
+});
+
 test('webTools: fetchUrlText 拒绝非https与内网地址', async () => {
     await assert.rejects(() => fetchUrlText('http://example.com/x'), /https/);
     await assert.rejects(() => fetchUrlText('https://127.0.0.1/x'), /不受允许|受限/);

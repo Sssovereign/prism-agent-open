@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>研究页导航增强 · 演示（真实组件 + 假数据）</title>
+  <style>
+    html, body { margin: 0; height: 100%; }
+    #app, .demo-stage { height: 100%; }
+    /* 复刻 .main-col 的容器查询名（conversation，导轨 ≥864px 才显示），
+       但去掉 48px 头部栅格行，让研究面板直接占满视口。 */
+    .demo-stage {
+      display: flex; flex-direction: column;
+      container: conversation / inline-size;
+      background: var(--bg); color: var(--fg);
+      font-family: var(--font-ui, sans-serif);
+    }
+    .demo-stage .conversation-region { flex: 1; }
+    .demo-banner {
+      position: fixed; top: 10px; right: 14px; z-index: 40;
+      padding: 4px 12px; border-radius: 999px;
+      border: 1px dashed var(--border); background: var(--bg-card);
+      color: var(--fg-subtlest); font-size: 12px; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/demo/research-rail-main.ts"></script>
+</body>
+</html>

@@ -9,7 +9,7 @@ test('发行dry-run不连接远端；拒绝把非发行文件当附件上传',()
  const dir=mkdtempSync(join(tmpdir(),'prism-publish-'));
  try{
   const asset=join(dir,'Prism-0.0.5-beta-mac-arm64.dmg'),notes=join(dir,'notes.md');writeFileSync(asset,'synthetic');writeFileSync(notes,'notes');
-  const args=[script,'--repo','Example/prism-releases','--tag','v0.0.5-beta','--title','beta','--notes-file',notes,'--assets',asset];
+  const args=[script,'--repo','Example/prism-releases','--tag','v0.0.5-beta','--title','棱镜 Prism 0.0.5-beta','--notes-file',notes,'--assets',asset];
   const output=execFileSync(process.execPath,args,{encoding:'utf8',env:{...process.env,PATH:'/missing-gh-cli'}});assert.match(output,/dry-run/);
   const bad=join(dir,'credential-master.key');writeFileSync(bad,'synthetic');
   assert.throws(()=>execFileSync(process.execPath,[...args.slice(0,-1),bad],{stdio:'pipe'}),/Command failed/);
@@ -24,7 +24,7 @@ test('草稿无Git标签时按发行ID定位并继续；禁止覆盖正式发行
  try{
   const asset=join(dir,'SHA256SUMS.txt'),notes=join(dir,'notes.md'),state=join(dir,'state.json'),calls=join(dir,'calls.jsonl');
   writeFileSync(asset,'synthetic');writeFileSync(notes,'notes\n');
-  const release={id:7,tag_name:'v0.0.5-beta',draft:true,name:'beta',body:'notes\n',prerelease:true,assets:[{name:'SHA256SUMS.txt',state:'uploaded',size:9,digest:'sha256:'+createHash('sha256').update('synthetic').digest('hex')}]};
+  const release={id:7,tag_name:'v0.0.5-beta',draft:true,name:'棱镜 Prism 0.0.5-beta',body:'notes\n',prerelease:true,assets:[{name:'SHA256SUMS.txt',state:'uploaded',size:9,digest:'sha256:'+createHash('sha256').update('synthetic').digest('hex')}]};
   writeFileSync(state,JSON.stringify(release));
   const fake=join(dir,'gh');
   writeFileSync(fake,'#!'+process.execPath+'\n'+`
@@ -35,7 +35,7 @@ else if(args[0]==='api'&&args[1].endsWith('/releases/7'))process.stdout.write(fs
 else if(args[0]==='release'&&args[1]==='edit'){}
 else {process.stderr.write('unexpected GH operation '+JSON.stringify(args));process.exit(8);}
 `,{mode:0o755});
-  const args=[script,'--repo','Example/prism-releases','--tag','v0.0.5-beta','--title','beta','--notes-file',notes,'--assets',asset,'--resume-draft','--publish'];
+  const args=[script,'--repo','Example/prism-releases','--tag','v0.0.5-beta','--title','棱镜 Prism 0.0.5-beta','--notes-file',notes,'--assets',asset,'--resume-draft','--publish'];
   const run=extra=>execFileSync(process.execPath,args,{encoding:'utf8',stdio:'pipe',env:{...process.env,PATH:dir,...extra}});
   assert.match(run({}),/已发布/);
   let operations=fs.readFileSync(calls,'utf8').trim().split('\n').map(JSON.parse);

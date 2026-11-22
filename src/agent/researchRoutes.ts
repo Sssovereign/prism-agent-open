@@ -2,19 +2,26 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Supervisor } from './supervisor.js';
 import { ApiError } from '../../contracts/errors.js';
 import { ok } from '../http.js';
+import { collectCachedMcpTools } from './mcpManager.js';
 import type { ResearchMode, ResearchModelChoice, ResearchSourceFileInput, ResearchSourceInput, ResearchSubject, ResearchCriterionInput } from '../../contracts/research.js';
 
 export function registerResearchRoutes(app: FastifyInstance, supervisor: Supervisor, auth: (req: FastifyRequest) => {userId:string}, deps:{updates?:{assertEntryOpen():void}}={}): void {
   const research=supervisor.research;
-  app.post<{Params:{projectId:string};Body:{mode:ResearchMode;objective:string;rounds?:number;models:Record<string,ResearchModelChoice>;sources?:ResearchSourceInput[];sourceFiles?:ResearchSourceFileInput[];sourceRunId?:string;decision?:{proposition:string;candidates:Array<{id?:string;text:string}>};subject?:ResearchSubject;criteria?:ResearchCriterionInput[];objections?:Array<{target?:unknown;text:string}>}}>('/api/v1/projects/:projectId/research',async(req,reply)=>{
+    app.post<{Params:{projectId:string};Body:{mode:ResearchMode;objective:string;rounds?:number;models:Record<string,ResearchModelChoice>;sources?:ResearchSourceInput[];sourceFiles?:ResearchSourceFileInput[];sourceRunId?:string;decision?:{proposition:string;candidates:Array<{id?:string;text:string}>};subject?:ResearchSubject;criteria?:ResearchCriterionInput[];objections?:Array<{target?:unknown;text:string}>;methods?:string[];mcpToolIds?:string[];attachmentIds?:string[]}}>('/api/v1/projects/:projectId/research',async(req,reply)=>{
     deps.updates?.assertEntryOpen();
     const {userId}=auth(req),session=(req as unknown as {session:{sessionId:string}}).session;
     if(!req.body||typeof req.body.objective!=='string')throw new ApiError('VALIDATION_FAILED','请填写研究议题');
     const {sourceFiles,...body}=req.body;
     // 文件引用在run创建前由服务端受控读取并切段成普通资料；协议层对来源无感知
     const imported=await research.expandSourceFiles(req.params.projectId,userId,sourceFiles);
-    const result=research.create({...body,userId,sessionId:session.sessionId,projectId:req.params.projectId,sources:[...(body.sources??[]),...imported]});
+    // 能力扩展显式挑字段（methods=技能名清单；mcpToolIds=只读声明工具qualifiedName），不透传其他未声明键
+    const result=research.create({...body,methods:Array.isArray(req.body.methods)?req.body.methods.filter((v):v is string=>typeof v==='string'):undefined,mcpToolIds:Array.isArray(req.body.mcpToolIds)?req.body.mcpToolIds.filter((v):v is string=>typeof v==='string'):undefined,userId,sessionId:session.sessionId,projectId:req.params.projectId,sources:[...(body.sources??[]),...imported]});
     return ok(req,reply,result,201);
+  });
+  /** 研究MCP候选清单：只读声明工具（hint只是资格线；实际放行以发起时勾选为准）。 */
+  app.get('/api/v1/research/mcp-candidates',async(req,reply)=>{
+    const {userId}=auth(req);
+    return ok(req,reply,{tools:collectCachedMcpTools(supervisor.opts.db,userId).filter(t=>t.readOnly).map(({qualifiedName,serverName,toolName,description})=>({qualifiedName,serverName,toolName,description}))});
   });
   app.get<{Params:{runId:string}}>('/api/v1/runs/:runId/research',async(req,reply)=>{
     research.owned(req.params.runId,auth(req).userId);

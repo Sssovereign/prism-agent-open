@@ -52,7 +52,13 @@ export const DEFAULT_SUBAGENT_SYSTEM_PROMPT = [
 export const DEFAULT_COMPACTION_SYSTEM_PROMPT = '你是执行链的上下文压缩器。基于对话记录生成结构化摘要，供后续继续执行任务：保留任务目标与用户补充、已完成的关键操作与结果（文件路径/命令/结论）、未完成事项与下一步、重要约束与错误教训。只概括记录中真实发生的内容，不得编造；摘要控制在1200字以内。';
 /** 系统提示词自定义：均为「追加」语义——内置默认始终保留为基底，自定义文本附于其后；trim 后空串视为未设置。mainAppend 追加在主链路 system prompt（项目规则之前）。 */
 export interface AgentPromptSettings { subagent?:string; compaction?:string; mainAppend?:string }
-export interface AgentRuntimeSettings { autoCompaction:boolean; keepRecentTurns:number; subagent?:SubagentSettings; prompts?:AgentPromptSettings; askUserQuestionAutoResolutionEnabled?:boolean; /** 持久记忆库开关（按项目隔离，普通任务生效）；缺省开启 */ memoryEnabled?:boolean }
+export interface AgentRuntimeSettings { autoCompaction:boolean; keepRecentTurns:number; subagent?:SubagentSettings; prompts?:AgentPromptSettings; askUserQuestionAutoResolutionEnabled?:boolean; /** 持久记忆库开关（按项目隔离，普通任务生效）；缺省开启 */ memoryEnabled?:boolean;
+    /** 研究能力位：参与者可用 MCP 工具（仅只读声明工具，发起研究时逐工具显式勾选冻结）；缺省开启 */ researchMcpTools?:boolean;
+    /** 研究能力位：技能正文冻结注入为分析方法（发起时显式选择）；缺省开启 */ researchSkillMethods?:boolean;
+    /** 研究能力位：项目记忆索引作只读背景上下文注入；缺省开启 */ researchMemory?:boolean;
+    /** 研究能力位：主持/汇总可用 verify_source 核验引证来源（不新增证据）；缺省开启 */ researchHostVerify?:boolean;
+    /** 研究 run 级模型请求上限（发起时冻结，40—400）；缺省240（ordinaryTools 阶段按需读取每次工具回合计入请求，80 已不够一场完整辩论） */ researchModelRequestLimit?:number;
+    /** 研究 run 级工具请求上限（发起时冻结，60—600）；缺省480 */ researchToolRequestLimit?:number }
 export const AGENT_PROMPT_MAX_CHARS = 8000;
 const AGENT_PROMPT_KEYS: Array<keyof AgentPromptSettings> = ['subagent','compaction','mainAppend'];
 /** 规整自定义提示词：非法输入整体丢弃，逐键 trim、限长，全空视为未设置（输出不含 prompts 键）。 */
@@ -69,15 +75,23 @@ export function normalizeAgentPrompts(value:unknown):AgentPromptSettings|undefin
     }
     return any?result:undefined;
 }
+function clampIntSetting(v:unknown,min:number,max:number,dflt:number):number{ const n=typeof v==='number'&&Number.isFinite(v)?Math.floor(v):NaN; return Number.isNaN(n)?dflt:Math.min(max,Math.max(min,n)); }
 export function normalizeAgentSettings(value:Partial<AgentRuntimeSettings>):AgentRuntimeSettings{
     const base:AgentRuntimeSettings={...DEFAULT_AGENT_SETTINGS,...value,subagent:{...DEFAULT_SUBAGENT_SETTINGS,...value.subagent}};
     base.memoryEnabled=value.memoryEnabled!==false;
+    // 研究能力位：缺省开启（自由度归还用户，默认安全语义由协议冻结与只读过滤保证）
+    base.researchMcpTools=value.researchMcpTools!==false;
+    base.researchSkillMethods=value.researchSkillMethods!==false;
+    base.researchMemory=value.researchMemory!==false;
+    base.researchHostVerify=value.researchHostVerify!==false;
+    base.researchModelRequestLimit=clampIntSetting(value.researchModelRequestLimit,40,400,240);
+    base.researchToolRequestLimit=clampIntSetting(value.researchToolRequestLimit,60,600,480);
     const prompts=normalizeAgentPrompts(value.prompts);
     if(prompts){base.prompts=prompts;return base;}
     delete base.prompts;
     return base;
 }
-export const DEFAULT_AGENT_SETTINGS: AgentRuntimeSettings = { autoCompaction:true, keepRecentTurns:3, memoryEnabled:true, subagent:{...DEFAULT_SUBAGENT_SETTINGS}, askUserQuestionAutoResolutionEnabled:true };
+export const DEFAULT_AGENT_SETTINGS: AgentRuntimeSettings = { autoCompaction:true, keepRecentTurns:3, memoryEnabled:true, subagent:{...DEFAULT_SUBAGENT_SETTINGS}, askUserQuestionAutoResolutionEnabled:true, researchMcpTools:true, researchSkillMethods:true, researchMemory:true, researchHostVerify:true, researchModelRequestLimit:240, researchToolRequestLimit:480 };
 export interface ModelConfigView extends Omit<ModelConfigInput, 'models'> {
     id: string;
     revision: number;

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {phaseNavLabel,claimTargetIndex,speechSummary,majorityVerdict,inputViewOf,dispositionFields,reviewSubjectFor} from '../web/view-model/research.js';
+import {phaseNavLabel,railGroupKey,phaseAtScroll,claimTargetIndex,speechSummary,majorityVerdict,inputViewOf,dispositionFields,reviewSubjectFor,normalizeDecision} from '../web/view-model/research.js';
 import type {ResearchRecord,ResearchReport,ResearchView} from '../contracts/research.js';
 
 const record=(over:Partial<ResearchRecord>):ResearchRecord=>({id:'r',kind:'source',participantId:null,phaseTaskId:null,title:'资料',content:'',hash:'h',url:null,truncated:false,published:true,...over});
@@ -10,6 +10,27 @@ test('research面板: 阶段导航标签按phaseKey与轮次组织',()=>{
  assert.equal(phaseNavLabel({id:'p',label:'pro',role:'pro',ordinal:0,phaseKey:'opening_pro',roundNo:0,status:'succeeded'},{role:'正方',opening:'开题',round:(n)=>`第${n}轮`}),'正方 · 开题');
  assert.equal(phaseNavLabel({id:'p',label:'pro',role:'pro',ordinal:2,phaseKey:'round_2_pro',roundNo:2,status:'running'},{role:'正方',opening:'开题',round:(n)=>`第${n}轮`}),'正方 · 第2轮');
  assert.equal(phaseNavLabel({id:'p',label:'host',role:'host',ordinal:4,phaseKey:'host',roundNo:0,status:'pending'},{role:'主持',opening:'开题',round:(n)=>`第${n}轮`}),'主持');
+});
+
+test('research面板: 导航轨分组键开题成对、轮次按轮分档',()=>{
+ assert.equal(railGroupKey({id:'p',label:'pro',role:'pro',ordinal:0,phaseKey:'opening_pro',roundNo:0,status:'succeeded'}),'opening');
+ assert.equal(railGroupKey({id:'p',label:'con',role:'con',ordinal:1,phaseKey:'opening_con',roundNo:0,status:'succeeded'}),'opening');
+ assert.equal(railGroupKey({id:'p',label:'pro',role:'pro',ordinal:2,phaseKey:'round_1_pro',roundNo:1,status:'running'}),'round:1');
+ assert.equal(railGroupKey({id:'p',label:'pro',role:'pro',ordinal:4,phaseKey:'round_2_pro',roundNo:2,status:'pending'}),'round:2');
+ assert.equal(railGroupKey({id:'p',label:'host',role:'host',ordinal:6,phaseKey:'host',roundNo:0,status:'pending'}),'host');
+ assert.equal(railGroupKey({id:'p',label:'juror1',role:'juror',ordinal:0,status:'succeeded'}),'juror');
+});
+
+test('research面板: 滚动停留判定取锚线上最后一个阶段并触底兜底',()=>{
+ const entries=[{id:'p1',top:0},{id:'p2',top:600},{id:'p3',top:1400}];
+ assert.equal(phaseAtScroll([],96),'');
+ assert.equal(phaseAtScroll(entries,-100),'');
+ assert.equal(phaseAtScroll(entries,96),'p1');
+ assert.equal(phaseAtScroll(entries,600),'p2');
+ assert.equal(phaseAtScroll(entries,1350),'p2');
+ assert.equal(phaseAtScroll(entries,1400),'p3');
+ assert.equal(phaseAtScroll(entries,-100,true),'p3');
+ assert.equal(phaseAtScroll(entries,96,true),'p3');
 });
 
 test('research面板: 回应定位索引覆盖本轮与继承的已发布主张',()=>{
@@ -78,4 +99,43 @@ test('research面板: 输入视野按冻结视图分类并反映联网搜索状�
  const offline=inputViewOf(view({recordIds:['r1'],tools:['research_read']}),records);
  assert.equal(offline.webSearch,false);
  assert.equal(offline.categories.length,1);
+});
+
+test('决定草稿归一化: 命题回退议题并剔空候选',()=>{
+ const n=normalizeDecision({proposition:'  ',candidates:[{text:' 方案A '},{text:''},{text:'维持现状'}]},' 采用哪种方案？ ');
+ assert.equal(n.proposition,'采用哪种方案？');
+ assert.equal(n.propositionFromObjective,true);
+ assert.deepEqual(n.candidates.map(c=>c.text),['方案A','维持现状']);
+ assert.equal(n.ready,true);
+ assert.deepEqual(n.issues,[]);
+});
+
+test('决定草稿归一化: 显式命题优先且候选不足不就绪',()=>{
+ const n=normalizeDecision({proposition:' 自定义命题 ',candidates:[{text:'A'}]},'议题');
+ assert.equal(n.proposition,'自定义命题');
+ assert.equal(n.propositionFromObjective,false);
+ assert.deepEqual(n.issues,['candidates-insufficient']);
+ assert.equal(n.ready,false);
+});
+
+test('决定草稿归一化: 议题超长不静默截断，要求显式短命题',()=>{
+ const long='长'.repeat(2001);
+ const n=normalizeDecision({proposition:'',candidates:[{text:'A'},{text:'B'}]},long);
+ assert.equal(n.proposition,'');
+ assert.deepEqual(n.issues,['proposition-too-long']);
+ assert.equal(n.ready,false);
+ const fixed=normalizeDecision({proposition:'短命题',candidates:[{text:'A'},{text:'B'}]},long);
+ assert.equal(fixed.ready,true);
+});
+
+test('决定草稿归一化: 超限候选与空草案分别报issue',()=>{
+ const tooLong=normalizeDecision({proposition:'长'.repeat(2001),candidates:[{text:'A'},{text:'B'}]},'');
+ assert.deepEqual(tooLong.issues,['proposition-too-long']);
+ const many=normalizeDecision({proposition:'p',candidates:Array.from({length:7},(_,i)=>({text:`c${i}`}))},'');
+ assert.deepEqual(many.issues,['candidates-too-many']);
+ const longCand=normalizeDecision({proposition:'p',candidates:[{text:'a'.repeat(501)},{text:'B'}]},'');
+ assert.deepEqual(longCand.issues,['candidate-too-long']);
+ const empty=normalizeDecision(null,'  ');
+ assert.equal(empty.issues.includes('proposition-empty'),true);
+ assert.equal(empty.ready,false);
 });

@@ -47,6 +47,7 @@ import SlashHelpDialog from './components/SlashHelpDialog.vue';
 import type {ApprovalMode} from '../contracts/permissions';
 import { APPROVAL_MODES, isApprovalMode } from '../contracts/permissions';
 import { ComposerSubmissionLedger } from './view-model/composerSubmission';
+import { normalizeDecision } from './view-model/research';
 import UpdateBanner from './components/UpdateBanner.vue';
 import { startUpdatePolling } from './updateNotice';
 
@@ -132,16 +133,19 @@ const busy = ref(false);
 const stopping = ref(false);
 const workMode = ref<WorkMode>('ordinary');
 const researchModels=ref<Record<string,string>>({});
-const researchRounds=ref(2),researchSourceText=ref(''),researchSourceFiles=ref<string[]>([]);
+const researchRounds=ref(2),researchSourceText=ref('');
 // v2差异化配置：辩论「需要做决定」（命题+候选）、评审「被评对象+标准」；复核入口从辩论报告预填。
 const researchDecision=ref<{proposition:string;candidates:Array<{text:string}>}|null>(null);
 const researchSubject=ref<{title:string;content:string}|null>(null);
 const researchCriteria=ref<Array<{text:string;mustHave:boolean}>>([{text:'',mustHave:false}]);
 const researchReviewSource=ref<string|null>(null);
+// 能力扩展（发起时显式挑字段，服务端冻结）：技能改由已启用技能装配自动下发（与普通任务同一份清单）；
+// MCP仍为只读声明工具显式勾选。
+const researchMcpToolIds=ref<string[]>([]);
 // 终态异议：随复核创建进入新run（后端校验目标指向来源研究的已发布主张或结论）。
 const pendingObjections=ref<Array<{target:unknown;text:string}>>([]);
 function resetResearchDraft(){
- researchDecision.value=null;researchSubject.value=null;researchCriteria.value=[{text:'',mustHave:false}];researchReviewSource.value=null;pendingObjections.value=[];
+ researchDecision.value=null;researchSubject.value=null;researchCriteria.value=[{text:'',mustHave:false}];researchReviewSource.value=null;pendingObjections.value=[];researchMcpToolIds.value=[];
 }
 function researchChoices(mode:'debate'|'jury'){
  const actors=mode==='debate'?['pro','con','host']:['juror1','juror2','juror3','aggregate'];
@@ -202,6 +206,22 @@ const selectedModelVision = computed<boolean>(() => {
   // 图片能力由服务端按 pi-ai 模型目录解析并随配置下发；未知模型按不支持处理
   return model.visionSupported === true;
 });
+// 研究发起的图片入口按各角色模型判定（与服务端创建前全角色预检同口径）：
+// 任一已解析角色模型明确不支持视觉才禁用——全局选中模型不参与研究判定（评审/辩论角色可全用视觉模型）。
+// 未解析到具体模型条目时不拦（服务端预检会点名角色）；与researchChoices同解析序：显式选择→角色绑定→全局。
+const researchVisionSupported = computed<boolean>(() => {
+  const actors = workMode.value==='debate'?['pro','con','host']:workMode.value==='jury'?['juror1','juror2','juror3','aggregate']:[];
+  for (const actor of actors) {
+    const value = researchModels.value[actor] || (actor in roleBindings.value ? roleBindings.value[actor as 'pro'|'con'|'host'] : '') || binding.value;
+    const index = value.indexOf(':');
+    if (index <= 0) continue;
+    const config = configs.value.find(c => c.id === value.slice(0, index));
+    const model = config?.models.find(m => m.modelId === value.slice(index+1) && m.enabled);
+    if (config && model && model.visionSupported === false) return false;
+  }
+  return true;
+});
+const composerVision = computed<boolean>(() => workMode.value!=='ordinary' ? researchVisionSupported.value : selectedModelVision.value);
 async function addComposerFiles(files: File[]): Promise<void> {
   const scope=draftKey.value,generation=sessionGeneration;
   if (!files.length || busy.value || uploadScopes[scope]) return;
@@ -492,6 +512,36 @@ function onProjectChange(payload: { id: string; name: string; grantId: string })
 
 
 const selectedId = computed(() => realSession.value?.runId);
+// 模型驱动浏览器时自动展开面板（对齐 ZCode：agent 命令开始即让用户全程可见）。
+// 只在用户正盯着本 run 且本应用在前台时展开；否则记 pending，切回本任务/回到本窗口时一次性补开——后台 run 不抢屏。
+const pendingBrowserActivity = ref(false);
+function openBrowserTab() {
+  if (viewportWidth.value >= 1280 && (!drawerOpen.value || drawerTab.value !== 'browser')) animateShellChange();
+  drawerTab.value = 'browser'; drawerOpen.value = true; sidebarOpen.value = false;
+}
+watch(() => realSession.value?.browserActivityRevision.value, rev => {
+  if (!rev || !realSession.value) return;
+  const foreground = selectedId.value === realSession.value.runId;
+  if (foreground && document.visibilityState === 'visible' && document.hasFocus()) {
+    pendingBrowserActivity.value = false;
+    if (!(drawerOpen.value && drawerTab.value === 'browser')) openBrowserTab();
+  } else if (foreground) {
+    pendingBrowserActivity.value = true;
+  }
+});
+watch(selectedId, id => {
+  if (id !== realSession.value?.runId || !pendingBrowserActivity.value) return;
+  pendingBrowserActivity.value = false;
+  if (document.visibilityState === 'visible' && !(drawerOpen.value && drawerTab.value === 'browser')) openBrowserTab();
+});
+// 盲区兜底：活动到达时用户在别的应用窗口（记了 pending），回到本窗口时 selectedId 未变不会触发上面的 watch
+function reconcileBrowserActivity() {
+  if (document.visibilityState !== 'visible' || !pendingBrowserActivity.value) return;
+  if (selectedId.value !== realSession.value?.runId) return;
+  pendingBrowserActivity.value = false;
+  if (!(drawerOpen.value && drawerTab.value === 'browser')) openBrowserTab();
+}
+document.addEventListener('visibilitychange', reconcileBrowserActivity);
 // needs_reconciliation（有未确认写入的中断）必须可停止：该状态的系统出口就是cancel后再重试
 const canStop = computed(() => !!realSession.value && (realSession.value.isActive.value || ['waiting_input', 'needs_reconciliation'].includes(realSession.value.status.value)));
 const headerStatus = computed(() => {
@@ -568,13 +618,24 @@ async function create() {
   if (!modelConfigId || !modelId) { setGuidanceError(t('app.invalidModelBinding')); return; }
   busy.value = true; error.value = '';
   try {
-    if(workMode.value!=='ordinary'&&composerAttachments.value.length)throw new Error(t('app.researchTextOnly'));
     const researchMode=workMode.value==='ordinary'?null:workMode.value;
+    // 决定草稿就绪门控：命题回退/候选剔空后仍不达标（如候选<2）阻止提交并提示，不静默降级为「无决定」。
+    // 修表单提交失败：提交载荷必须用归一化结果（命题回退议题、候选剔空）——原样发送草稿会把
+    // 空命题/空候选行直接打给后端（HTTP 400），与「留空沿用议题」的界面提示自相矛盾。
+    let decisionPayload:{proposition:string;candidates:Array<{text:string}>}|null=null;
+    if(researchMode==='debate'&&researchDecision.value){
+      const decisionCheck=normalizeDecision(researchDecision.value,text);
+      if(!decisionCheck.ready){toast(t('app.decisionIncomplete'),{variant:'warning'});return;}
+      decisionPayload={proposition:decisionCheck.proposition,candidates:decisionCheck.candidates};
+    }
     const created = await v1<{ runId: string; conversationId: string; status: string }>(`/api/v1/projects/${encodeURIComponent(projectId.value)}/${researchMode?'research':'runs'}`, {
       method: 'POST', body: JSON.stringify(researchMode?{mode:researchMode,objective:text,rounds:researchRounds.value,models:researchChoices(researchMode),
-        sources:researchSourceText.value.trim()?[{title:t('app.sharedSourceTitle'),content:researchSourceText.value}]:[],sourceFiles:researchSourceFiles.value.map(path=>({grantId:grantId.value,relativePath:path})),
-        ...(researchMode==='debate'&&researchDecision.value?{decision:researchDecision.value}:{}),
+        sources:researchSourceText.value.trim()?[{title:t('app.sharedSourceTitle'),content:researchSourceText.value}]:[],
+        // 显式图片附件：走同一套上传链路（saveAttachment），服务端创建时冻结元数据并按角色核验vision
+        attachmentIds:composerAttachments.value.map(a=>a.id),
+        ...(decisionPayload?{decision:decisionPayload}:{}),
         ...(researchMode==='jury'&&researchSubject.value?{subject:researchSubject.value,criteria:researchCriteria.value.filter(criterion=>criterion.text.trim())}:{}),
+        ...(researchMcpToolIds.value.length?{mcpToolIds:researchMcpToolIds.value}:{}),
         ...(researchMode==='jury'&&researchReviewSource.value?{sourceRunId:researchReviewSource.value}:{}),
         ...(researchMode==='jury'&&researchReviewSource.value&&pendingObjections.value.length?{objections:pendingObjections.value}:{})}:{ objective: text, modelConfigId, modelId, conversationId: activeConversationId.value ?? undefined, attachmentIds: composerAttachments.value.map(a => a.id), ...(thinkingOverride.value ? { thinkingLevel: thinkingOverride.value } : {}), ...(researchHandoffDraft.value?{researchHandoff:{sourceRunId:researchHandoffDraft.value.sourceRunId,items:researchHandoffDraft.value.items}}:{}) }),
     });
@@ -840,16 +901,6 @@ async function locateMessage(item:{id:string;runId:string;authorType?:string;pha
  await nextTick();await realTimeline.value?.revealMessage(item.id,item.runId);
 }
 function quoteSelection(text:string){const quote=text.split('\n').map(line=>`> ${line}`).join('\n');if(!realSession.value&&workMode.value!=='ordinary'){if(researchSourceText.value.length+quote.length>20000){toast(t('app.quoteSourceLimit'),{variant:'warning'});return;}researchSourceText.value=`${researchSourceText.value}${researchSourceText.value?'\n\n':''}${quote}\n\n`;return;}if(objective.value.length+quote.length>20000){toast(t('app.quoteMessageLimit'),{variant:'warning'});return;}objective.value=`${objective.value}${objective.value?'\n\n':''}${quote}\n\n`;void nextTick(()=>document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus());}
-// 研究草稿态：+ / @ 引用的文件与文件夹内容落入共同资料（提交时作为 sources 下发）。
-// 研究共同资料：文本直接追加；文件引用只收相对路径chips，正文由服务端在发起时按授权导入
-function appendResearchSource(payload:{text:string;kind:'file'|'session';path?:string}){
-  if(payload.kind==='file'&&payload.path){
-    if(researchSourceFiles.value.includes(payload.path)){toast(t('app.sourceFileDuplicate'),{variant:'info'});return;}
-    if(researchSourceFiles.value.length>=20){toast(t('app.sourceFileLimit'),{variant:'warning'});return;}
-    researchSourceFiles.value=[...researchSourceFiles.value,payload.path];return;
-  }
-  const next=`${researchSourceText.value}${researchSourceText.value?'\n\n':''}${payload.text}`;if(next.length>20000){toast(t('app.quoteSourceLimitExact'),{variant:'warning'});return;}researchSourceText.value=next;
-}
 function askSelection(text:string){newTask();quoteSelection(text);}
 async function enqueueCurrent(){
  if(dispatchSlashSubmission(objective.value.trim()))return;
@@ -914,6 +965,7 @@ onUnmounted(() => {
   window.removeEventListener('resize', onResize);
   systemTheme.removeEventListener('change', onSystemTheme);
   resizeCleanup?.(); if(shellAnimationTimer)clearTimeout(shellAnimationTimer);
+  document.removeEventListener('visibilitychange', reconcileBrowserActivity);
 });
 </script>
 
@@ -934,7 +986,8 @@ onUnmounted(() => {
         @open-outputs="openOutputs" @toggle-detail="toggleDetail" @toggle-sidebar="toggleSidebar" @change-mode="changeMode" @toggle-eye-care="preferences = { ...preferences, eyeCare: !preferences.eyeCare }"
       />
       <section class="conversation-region" :class="{ 'is-draft': !realSession }">
-      <ConversationRail v-if="realSession" :items="railItems" :active-id="railActiveId" @locate="locateRailItem" />
+      <!-- 问题导轨只随 RealTimeline 出现：纯研究视图由 ResearchPanel 自带的阶段导轨接管左缘，避免双轨重叠。 -->
+      <ConversationRail v-if="realSession && workMode==='ordinary'" :items="railItems" :active-id="railActiveId" @locate="locateRailItem" />
       <div v-if="realSession" class="conversation-feature-actions"><button class="text-btn" type="button" :aria-expanded="findOpen" @click="findOpen=!findOpen">{{t('app.findConversation')}}</button><button class="text-btn" type="button" :aria-expanded="contextHistoryOpen" @click="contextHistoryOpen=!contextHistoryOpen">{{t('app.organizeHistory')}}</button></div>
       <ConversationFind v-if="realSession&&findOpen" :run-id="realSession.runId" @close="findOpen=false" @locate="locateMessage"/>
       <div v-if="realSession&&contextHistoryOpen" class="context-history-seat"><ContextHistoryPanel :run-id="realSession.runId"/></div>
@@ -945,7 +998,7 @@ onUnmounted(() => {
         <template v-else-if="realSession&&restoredResearch">
           <section class="research-restore">
             <header class="research-restore-bar"><span>{{t('research.restoreTitle')}}</span><button class="text-btn" type="button" :aria-expanded="researchRestoreOpen" @click="researchRestoreOpen=!researchRestoreOpen">{{researchRestoreOpen?t('research.restoreCollapse'):t('research.restoreExpand')}}</button></header>
-            <ResearchPanel v-if="researchRestoreOpen" :key="restoredResearch.runId" ref="researchPanel" :run-id="restoredResearch.runId" :mode="restoredResearch.mode" :objective="restoredResearch.objective||realObjective" :status="restoredResearch.status" :busy="busy" @review="reviewResearch" @settings="openSettings('models')" @continue="continueConversation" @handoff="handoffDialog={prefill:$event,sourceRunId:restoredResearch.runId}" />
+            <ResearchPanel v-if="researchRestoreOpen" :key="restoredResearch.runId" ref="researchPanel" :with-rail="false" :run-id="restoredResearch.runId" :mode="restoredResearch.mode" :objective="restoredResearch.objective||realObjective" :status="restoredResearch.status" :busy="busy" @review="reviewResearch" @settings="openSettings('models')" @continue="continueConversation" @handoff="handoffDialog={prefill:$event,sourceRunId:restoredResearch.runId}" />
           </section>
           <RealTimeline ref="realTimeline" :session="realSession" :objective="realObjective" :follow-output="preferences.followOutput" :busy="busy" :retrying="retryingRunId===realSession.runId" @open-settings="openSettings('models')" @resume="resumeRun" @retry="retryRun" @fork-edit="onForkEdit" @fork="onFork" />
         </template>
@@ -959,7 +1012,7 @@ onUnmounted(() => {
       </div>
       <TodoPanel v-if="realSession" :plan="realSession.todos.value" :is-streaming="realSession.isActive.value" />
       <div v-if="!realSession||workMode==='ordinary'||realSession.status.value!=='succeeded'" class="composer-seat" :class="{'has-session': !!realSession, 'has-research': !realSession&&workMode!=='ordinary'}">
-      <ResearchSetup v-if="!realSession&&workMode!=='ordinary'" :mode="workMode" :configs="configs" :binding="binding" v-model:models="researchModels" v-model:rounds="researchRounds" v-model:source-text="researchSourceText" v-model:source-files="researchSourceFiles" v-model:decision="researchDecision" v-model:subject="researchSubject" v-model:criteria="researchCriteria" :project-id="projectId" :file-provider="composerFileProvider" />
+      <ResearchSetup v-if="!realSession&&workMode!=='ordinary'" :mode="workMode" :configs="configs" :binding="binding" v-model:models="researchModels" v-model:rounds="researchRounds" v-model:source-text="researchSourceText" v-model:decision="researchDecision" v-model:subject="researchSubject" v-model:criteria="researchCriteria" v-model:mcp-tool-ids="researchMcpToolIds" :objective="objective" :project-id="projectId" />
       <ConversationQueuePanel v-if="realSession&&workMode==='ordinary'" ref="queuePanel" :run-id="realSession.runId" :active="realSession.isActive.value" @sent="$event!==realSession?.runId&&openRealRun($event)"/>
       <ErrorBanner v-if="error" :message="error" :detail="errorMeta?.detail" :code="errorMeta?.code" :request-id="errorMeta?.requestId" :action-label="errorMeta?.action?.label" dismissible @action="runErrorAction" @dismiss="clearError"/>
       <UserQuestionPanel v-if="realSession?.pendingQuestion.value" :key="realSession.pendingQuestion.value.id" :session="realSession" :request="realSession.pendingQuestion.value"/>
@@ -968,10 +1021,10 @@ onUnmounted(() => {
         :thinking-level="thinkingOverride" @update:thinking-level="onThinkingLevelChange"
         :mode="workMode" :approval-mode="realSession && canStop?(realRunMeta[realSession.runId]?.approvalMode||projectApprovalMode):projectApprovalMode" :permission-saving="permissionSaving" :busy="busy || permissionSaving || realSession?.busy.value === true" :can-stop="canStop" :stopping="stopping"
         :submit-disabled="!realCanSubmit && !!binding" :project-id="projectId" :projects="projects.filter(p=>!p.archived)" :new-task="!realSession" :live-session="!!realSession?.isActive.value"
-        :attachments="composerAttachments" :attachment-uploading="attachmentUploading" :vision-supported="selectedModelVision" :source-mode="!realSession&&workMode!=='ordinary'"
-        :app-commands="appSlashCommands" :skills="slashSkills" :file-provider="composerFileProvider" :history-entries="promptHistoryEntries" :sessions="composerSessions"
+        :attachments="composerAttachments" :attachment-uploading="attachmentUploading" :vision-supported="composerVision"
+        :app-commands="appSlashCommands" :skills="slashSkills" :file-provider="composerFileProvider" :history-entries="promptHistoryEntries" :sessions="workMode==='ordinary'?composerSessions:[]"
         @change-approval-mode="changeApprovalMode" @modal-change="sidebarModalOpen=$event" @select-project="selectWorkspaceProject" @create-project="openCreateProject" @submit="submitCurrent" @queue="enqueueCurrent" @stop="stopRun" @open-files="openFiles" @open-settings="openSettings('models')"
-        @add-files="addComposerFiles" @remove-attachment="removeComposerAttachment" @insert-source="appendResearchSource"
+        @add-files="addComposerFiles" @remove-attachment="removeComposerAttachment"
       >
         <template v-if="realSession" #dock><UsageStatusBar :session="realSession" :mode="statusbarMode" :compact-busy="compactBusy" :compact-notice="compactNotice" @compact="compactCurrent" @toggle-mode="statusbarMode = statusbarMode === 'detailed' ? 'compact' : 'detailed'" /></template>
       </TaskComposer>

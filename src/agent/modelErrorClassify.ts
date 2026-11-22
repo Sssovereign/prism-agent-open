@@ -26,8 +26,9 @@ const AUTH_PATTERN = /\b40[13]\b|invalid[_ ]api[_ ]key|incorrect api key|unautho
 const RATE_PATTERN = /\b429\b|rate[_ ]?limit|too many requests|overloaded/i;
 const TIMEOUT_PATTERN = /\b504\b|\btimeout\b|timed out|\betimedout\b|\beconnaborted\b/i;
 // 弱网/高丢包的传输层错误：结构化 code（diagnostics.error.code）精确识别，文案兜底覆盖无诊断的场景。
+// 棱镜自身传输包装文案（模型响应中断/无法连接接口）也是瞬态：流已建立后中断=传输层掉线，连接失败按瞬态重试（上限由重试层数控制）。
 const NETWORK_CODE_PATTERN = /^(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ETIMEDOUT|EAI_AGAIN|UND_ERR[A-Z0-9_]*|ERR_SSL_[A-Z0-9_]*BAD_RECORD_MAC)$/;
-const NETWORK_TEXT_PATTERN = /fetch failed|socket hang up|client network socket disconnected|premature close|\beconnreset\b|\beconnrefused\b|\beconnaborted\b|\betimedout\b|\bund_err[a-z_]*/i;
+const NETWORK_TEXT_PATTERN = /fetch failed|socket hang up|client network socket disconnected|premature close|模型响应中断|无法连接接口|\beconnreset\b|\beconnrefused\b|\beconnaborted\b|\betimedout\b|\bund_err[a-z_]*/i;
 
 // 结构化优先：pi 在 diagnostics 里保留原始抛出值（name/message/code），比 errorMessage 文案更可靠。
 // 只认字符串网络错误码——数字码是HTTP状态（401/500），归状态语义判定，不进网络码分支。

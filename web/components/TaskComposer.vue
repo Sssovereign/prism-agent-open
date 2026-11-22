@@ -45,8 +45,6 @@ const props = defineProps<{
   submitDisabled?: boolean;
   /** 存在运行中的真实Run：Enter提交=补充注入 */
   liveSession?: boolean;
-  /** 研究草稿态：+ / @ 的文件与文件夹引用改道进共同资料（insert-source 事件），不落入议题 */
-  sourceMode?: boolean;
   /** 块E2：已上传附件（App侧持有，提交成功才清空，失败保留可重试） */
   attachments?: ComposerAttachment[];
   attachmentUploading?: boolean;
@@ -80,8 +78,6 @@ const emit = defineEmits<{
   (e: 'open-files'): void;
   (e: 'add-files', files: File[]): void;
   (e: 'remove-attachment', id: string): void;
-  /** 研究草稿态的文件/会话引用：文件带path转共同资料chips（服务端导入），会话仍为文本 */
-  (e: 'insert-source', payload: { text: string; kind: 'file' | 'session'; path?: string }): void;
 }>();
 
 const box = ref<HTMLTextAreaElement>();
@@ -121,10 +117,12 @@ function onDocKeydown(event: KeyboardEvent): void {
 }
 
 // 块E2：附件入口。无视觉能力的模型直接禁用并给出原因（计划E2“无vision供应商明示不可用”）
+// 研究模式同样允许图片附件（服务端创建时冻结元数据+启动前按角色核验vision）
+// 研究运行中的补充（steer）当前服务端只收文字：入口明示禁用，避免"能上传但发送必失败"的假可用
 const attachDisabledReason = computed(() => {
-  if (props.mode !== 'ordinary') return t('composer.attachDisabled.research');
   if (props.busy) return t('composer.busySubmitting');
   if (props.attachmentUploading) return t('composer.uploadingImages');
+  if (props.liveSession && props.mode !== 'ordinary') return t('composer.steerTextOnly');
   if (props.visionSupported === false) return t('composer.noVision');
   if ((props.attachments?.length ?? 0) >= MAX_ATTACHMENTS_PER_MESSAGE) return t('composer.imageLimit', { max: MAX_ATTACHMENTS_PER_MESSAGE });
   return '';
@@ -191,7 +189,7 @@ function textareaAroundCursor(): { before: string; after: string } | null {
 /** 光标/文本变化后重算激活触发器；Esc 关闭过的 token 签名不重复弹出。 */
 function syncTrigger(): void {
   const around = textareaAroundCursor();
-  const trigger = around ? extractActivePromptInputTrigger(around.before) : null;
+  let trigger = around ? extractActivePromptInputTrigger(around.before) : null;
   const signature = getPromptInputTriggerSignature(trigger);
   if (!trigger || !signature || signature === dismissedSignature.value) {
     if (activeTrigger.value) activeTrigger.value = null;
@@ -204,11 +202,11 @@ function syncTrigger(): void {
   dismissedSignature.value = null;
 }
 
+const skillSuggestions = computed(() => buildSkillSuggestions(props.skills ?? []));
 const slashSuggestions = computed(() => ([
   ...buildAppSlashCommandSuggestions(props.appCommands ?? []),
-  ...buildSkillSuggestions(props.skills ?? []),
+  ...skillSuggestions.value,
 ]));
-const skillSuggestions = computed(() => buildSkillSuggestions(props.skills ?? []));
 
 /** @ 引用 query 支持路径前缀（`src/`），末段做模糊过滤；目录级进入替代上游全局索引。 */
 function splitFileQuery(query: string): { dir: string; name: string } {
@@ -309,13 +307,6 @@ function insertFromAddMenu(payload:{text:string;kind:'file'|'command'|'skill'|'s
  const before=saved.text.slice(0,saved.start),after=saved.text.slice(saved.end);
  let result:{text:string;cursorOffset:number};
  const trigger=saved.start===saved.end?extractActivePromptInputTrigger(before):null;
- // 研究草稿态：文件/文件夹与会话引用是共同资料，不是议题正文；'@' 触发时顺带清掉输入中的 token。
- if(props.sourceMode&&(payload.kind==='file'||payload.kind==='session')){
-  const cleaned=trigger?.trigger==='@'?removeActivePromptInputToken(before,after,payload.text):null;
-  if(cleaned)emit('update:objective',cleaned.text);
-  emit('insert-source',{text:payload.text,kind:payload.kind,path:payload.path});
-  return;
- }
  if((payload.kind==='file'&&trigger?.trigger==='@')||(payload.kind==='skill'&&trigger?.trigger==='$')){
   result=replaceActivePromptInputTokenWithMarkdown(before,after,payload.text)??{text:saved.text,cursorOffset:saved.start};
  }else{
@@ -349,15 +340,6 @@ function selectSuggestion(index: number): void {
     replacement = replaceActivePromptInputTokenWithMarkdown(around.before, around.after, buildSkillMentionMarkdown(suggestion.value, suggestion.data?.path));
   } else if (suggestion.trigger === '@') {
     const markdown = buildFileMentionMarkdown(suggestion.data?.relativePath ?? suggestion.value, suggestion.value, suggestion.data?.kind === 'directory' ? 'directory' : 'file');
-    // 研究草稿态：@ 文件同样进共同资料（带path走服务端导入），议题只清掉已输入的 '@' token。
-    if (props.sourceMode) {
-      closePanel(null);
-      if (suggestion.data?.kind === 'directory') { toast('文件夹不能作为资料，请选择具体文件', { variant: 'warning' }); return; }
-      const cleaned = removeActivePromptInputToken(around.before, around.after, suggestion.value);
-      if (cleaned) emit('update:objective', cleaned.text);
-      emit('insert-source', { text: markdown, kind: 'file', path: suggestion.data?.relativePath });
-      return;
-    }
     replacement = replaceActivePromptInputTokenWithMarkdown(around.before, around.after, markdown);
   } else {
     replacement = replaceActivePromptInputTokenWithMarkdown(around.before, around.after, `/${suggestion.value}`);
@@ -381,7 +363,7 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); selectedIndex.value = Math.min(selectedIndex.value + 1, total - 1); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); selectedIndex.value = Math.max(selectedIndex.value - 1, 0); return; }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePanel(getPromptInputTriggerSignature(activeTrigger.value)); return; }
-    if (e.key === 'Enter' || e.key === 'Tab') {
+    if ((e.key === 'Enter' || e.key === 'Tab') && total > 0) {
       e.preventDefault(); e.stopPropagation();
       selectSuggestion(selectedIndex.value);
       return;
@@ -496,7 +478,6 @@ const caption = computed(() => {
       </div>
       <div class="composer-bar">
         <ComposerAddMenu
-          v-if="!sourceMode"
           :draft="objective" :new-task="newTask" :project-id="projectId" :disabled="busy"
           :image-disabled-reason="attachDisabledReason" :offer-goal="!!appCommands?.some(command=>command.value==='goal')"
           :anchor="addMenuAnchor" :file-provider="fileProvider" :skills="skills" :sessions="sessions"

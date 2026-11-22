@@ -91,6 +91,32 @@ test('客户端取消：上游socket关闭（服务端连接终止）', async t 
   assert.equal(clientClosed, true, '取消必须终止上游连接');
 });
 
+test('上游中途断连：包装错误保留原始传输错误码（瞬态重试分类依据）', async t => {
+  const f = await httpsFixture(t);
+  f.server.removeAllListeners('request');
+  f.server.on('request', (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: start\n\n');
+    // 不end，直接砸socket：客户端response流报传输层错误（ECONNRESET族）
+    setTimeout(() => res.socket?.destroy(), 60);
+  });
+  const { fetch } = streamingPinnedFetch(f.url('/_runtime/v1/model'), { ...profile, caCertPem: f.certPem });
+  const response = await fetch(f.url('/_runtime/v1/model/chat/completions'), {
+    method: 'POST', body: '{}', headers: { 'content-type': 'application/json' },
+  } as RequestInit);
+  const reader = response.body!.getReader();
+  await reader.read(); // 消费首片
+  let readError: unknown;
+  try {
+    for (;;) { const { done } = await reader.read(); if (done) break; }
+  } catch (e) { readError = e; }
+  assert.ok(readError instanceof ApiError, `期望ApiError，实际 ${String(readError)}`);
+  assert.equal(readError.code, 'PROVIDER_ERROR');
+  // 原始错误码必须保留在文案里（2026-11-22实机事故：纯中文包装让pi重试/分类器/监督器全部失明）
+  assert.match(readError.message, /模型响应中断，请重试（.+）/, `原始传输错误码丢失：${readError.message}`);
+  assert.notEqual(readError.message, '模型响应中断，请重试', '纯中文无细节包装=退回事故形态');
+});
+
 test('空闲超时：有数据后停滞触发MODEL_TIMEOUT，收到数据即重置', async t => {
   const f = await httpsFixture(t);
   const idleProfile: StreamProfile = { ...profile, idleTimeoutMs: 400 };

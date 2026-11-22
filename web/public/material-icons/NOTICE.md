@@ -1,6 +1,5 @@
-# Material Icon Theme
-Copy of icons from Material Icon Theme version 5.38.1 under the MIT license.
-Upstream source: https://github.com/material-extensions/vscode-material-icon-theme/tree/v5.38.1
-Published extension: https://marketplace.visualstudio.com/items?itemName=PKief.material-icon-theme
-The upstream word.svg, powerpoint.svg and file.svg also supply the local docx.svg, pptx.svg and xlsx.svg aliases.
-File associations adapt the upstream Material Icon Theme and ZCode mappings. See the ZCode attribution for details.
+Material Icon Theme (MIT), Copyright (c) 2025 Material Extensions.
+1146 SVGs copied from the installed ZCode app's out/renderer/material-icons catalog on 2026-11-13.
+Original asset import revision was not recorded by ZCode; per-file hashes are retained in this task's receipt.
+License reference pinned by ZCode: cb1dfb6d9cb73b15681a93939983d75dbba7bf5b, vscode-material-icon-theme.
+Application file/code mappings adapt ZCode a9fe401 fileDisplayHelpers.ts and Material Icon Theme's fileIcons.ts (local snapshot).

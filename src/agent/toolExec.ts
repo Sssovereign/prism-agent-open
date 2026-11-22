@@ -488,3 +488,4 @@ export async function toolReadArtifact(db: Db, ctx: { projectId: string }, args:
         content: text.slice(0, MAX), truncated: text.length > MAX,
     };
 }
+

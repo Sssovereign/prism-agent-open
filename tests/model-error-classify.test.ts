@@ -99,6 +99,22 @@ test('network error message patterns act as fallback when diagnostics are absent
     }
 });
 
+// 自身传输包装（streamNetwork/network）必须按瞬态识别：2026-11-22实机辩论主持阶段，
+// DeepSeek流中断被包装成纯中文'模型响应中断，请重试'，pi重试/监督器白名单全部失明 → 整run失败。
+test('prism transport wraps are retryable: with original code appended and bare', () => {
+    // 新包装：原始错误码保留在括号内
+    const withCode = classifyModelError(failing('模型响应中断，请重试（ECONNRESET）'));
+    assert.equal(withCode.code, 'PROVIDER_ERROR');
+    assert.equal(withCode.retryable, true);
+    const connect = classifyModelError(failing('无法连接接口，请检查地址和网络（ECONNREFUSED）'));
+    assert.equal(connect.retryable, true);
+    // 兜底：即使原始错误无errno code（普通Error），包装文案本身按传输层瞬态处理
+    const bare = classifyModelError(failing('模型响应中断，请重试（boom）'));
+    assert.equal(bare.retryable, true);
+    const plain = classifyModelError(failing('模型响应中断，请重试'));
+    assert.equal(plain.retryable, true);
+});
+
 test('non-retryable families still win over structured network codes (quota/auth ordering preserved)', () => {
     const quota = classifyModelError(withDiagnostic('ECONNRESET', 'You exceeded your current quota, please check your plan and billing details.'));
     assert.equal(quota.code, 'MODEL_QUOTA_EXCEEDED');

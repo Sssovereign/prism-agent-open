@@ -7,7 +7,7 @@ import {resizeImage} from '@earendil-works/pi-coding-agent';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Db } from '../storage/db.js';
 import { ApiError } from '../../contracts/errors.js';
@@ -28,8 +28,8 @@ import { collectCachedMcpTools, callQualifiedMcpTool, type QualifiedMcpTool } fr
 import { collectEnabledSkillPaths } from './skillCatalog.js';
 import { replaceRunTodos, type TodoItem } from './runTodos.js';
 import { buildRunnerSeatbeltProfile, runnerSandboxSpawnArgs } from './seatbelt.js';
-import { loadAttachmentImages, normalizeAttachmentIds, attachmentView, type SteerImage } from './attachments.js';
-import { buildContextManifest, resolveRequestInput, type ProjectRulesDenied } from './contextManifest.js';
+import { loadAttachmentImages, loadFrozenAttachmentImages, normalizeAttachmentIds, attachmentView, type SteerImage } from './attachments.js';
+import { buildContextManifest, readProjectRules, resolveRequestInput, type ProjectRulesDenied } from './contextManifest.js';
 import { waitStateVersion } from './waitStateVersion.js';
 import {requiresApproval} from './approvalPolicy.js';
 import { MemoryLifecycle } from './memoryLifecycle.js';
@@ -112,6 +112,8 @@ interface ActiveRun {
     userId: string;
     sessionId: string;
     workspace: GrantRow;
+    /** 本次attempt的session目录（runtime/<attemptId>/session）：runner命令组登记文件的清扫依据 */
+    sessionDir: string;
     subagentConfig: import('../../contracts/models.js').SubagentSettings;
     binding: FrozenModelBinding;
     proc: ChildProcess | null;
@@ -160,6 +162,8 @@ export class Supervisor {
         this.research = new ResearchCoordinator(opts.db, {
             freeze: (sessionId, configId, modelId) => this.freezeModelConfig(sessionId,configId,modelId),
             launch: (runId,attemptId,sessionId,model) => this.startAttempt(runId,attemptId,sessionId,model,this.activeGrantOf((this.db.db.prepare('SELECT project_id FROM runs WHERE id=?').get(runId) as {project_id:string}).project_id)),
+            // 研究记忆注入：只取索引摘要（正文永不进入研究）；损坏由 readMemoryIndex 抛错→create 显式省略。
+            memoryIndex: (projectId) => { try { return buildMemoryBootstrap(this.dataDir, projectId).index; } catch { return null; } },
         });
         this.heartbeatTimer = setInterval(() => this.watchdog(), HEARTBEAT_INTERVAL_MS);
         this.heartbeatTimer.unref?.();
@@ -388,6 +392,20 @@ export class Supervisor {
         if (!['created', 'waiting_input'].includes(run.status)) throw new ApiError('RUN_NOT_RESUMABLE', 'Run当前状态不可启动');
         const snapshot = JSON.parse(run.config_snapshot_json) as RunConfigSnapshot;
         const research = this.research.context(attemptId);
+        // 研究复用普通Agent能力：规则/技能/附加根/显式附件同属ordinaryTools能力束——仅ordinaryTools run装载。
+        // 每个phase启动时按发起时冻结的元数据重载并核验（存在/归属/hash/魔数/大小），任一不符明确失败。
+        // 模型不支持视觉→可重试失败（创建前已全角色预检，此处是retry时点的复核）。不静默降级为纯文本。
+        // 旧run/固定v1 run（无ordinaryTools快照键）一律维持旧受限视图：不装载附件、不注入项目规则、
+        // 不下发技能清单与附加工作目录（修"v1任务执行输入变化"：这些本属v2能力束，装进v1偏离旧版行为）。
+        const researchOrdinaryTools = research ? this.research.ordinaryToolsForRun(runId) : [];
+        const researchAttachments = research && researchOrdinaryTools.length ? this.research.attachmentsForRun(runId) : [];
+        if (research && researchAttachments.length && !resolveVisionSupport(config.protocol ?? 'openai-completions', config.baseUrl, config.modelId, config.parameters?.advanced)) {
+            // 角色模型在创建时冻结（retry不重读模型目录）：失败须引导重新发起，而非暗示重试可换模型
+            throw new ApiError('VALIDATION_FAILED', `角色${research.phase.label}的模型不支持图片输入；请移除附件重新发起，或为该角色选择支持图片输入的模型后新建研究`);
+        }
+        const researchImages = researchAttachments.length
+            ? loadFrozenAttachmentImages(this.db, this.ownerOfRun(runId), researchAttachments)
+            : [];
 
         const dirs = this.attemptDirs(attemptId);
         for (const dir of [dirs.base, dirs.home, dirs.scratch, dirs.tmp, dirs.session]) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -418,7 +436,15 @@ export class Supervisor {
         // 可信上下文清单（F01/F02/F04）：正式历史+已确认checkpoint+项目规则+跨Run产物元数据+
         // 副作用账本。start模式继承同会话其他Run的checkpoint（F01跨Run追问）；resume模式继承
         // 本Run更早attempt的checkpoint（F04恢复）。清单内容与hash记入审计。
-        const manifest = research ? { objective:research.prompt, objectiveMessageId:'', objectiveSeq:0, objectiveImages:[], historyMessages:[], historyTruncated:false, isResume:false, restoredInputThroughSeq:0, inheritedCheckpoint:null, inheritedArtifacts:[], revertedFiles:[],toolLedger:[],projectRules:null } : buildContextManifest(this.db, {
+        const manifest = research ? {
+            // 研究attempt：不继承普通对话历史/跨Run checkpoint/其他角色私稿；项目规则（AGENTS.md）
+            // 与显式附件图片按普通任务同一链路下发，但仅限ordinaryTools快照run；v1 run维持旧最小清单（projectRules=null）。
+            objective:research.prompt, objectiveMessageId:'', objectiveSeq:0,
+            objectiveImages: researchImages,
+            historyMessages:[], historyTruncated:false, isResume:false, restoredInputThroughSeq:0,
+            inheritedCheckpoint:null, inheritedArtifacts:[], revertedFiles:[], toolLedger:[],
+            projectRules: researchOrdinaryTools.length ? readProjectRules(grant) : null,
+        } : buildContextManifest(this.db, {
             runId, conversationId: run.conversation_id, grant,
             checkpointFrom: mode === 'start' ? 'conversation' : 'run',
         });
@@ -433,9 +459,14 @@ export class Supervisor {
             ledgerCount: manifest.toolLedger.length,
         }, 'audit', attemptId);
 
-        const mcpTools = research ? [] : collectCachedMcpTools(this.db, this.ownerOfRun(runId));
-        // 块C技能装配：约定目录扫描+启停入库后仅下发显式路径；激活记录进审计
-        const enabledSkills = research ? [] : collectEnabledSkillPaths(this.db, this.ownerOfRun(runId), grant.canonical_root);
+        // 研究run：MCP只下发创建时冻结的manifest（mcpToolsForRun 与 research.tool() dispatch 共用同一份快照）；
+        // 旧run无快照键=空清单。普通任务维持原发现清单。
+        const mcpTools = research ? this.research.mcpToolsForRun(runId) : collectCachedMcpTools(this.db, this.ownerOfRun(runId));
+        // 块C技能装配：约定目录扫描+启停入库后仅下发显式路径；激活记录进审计。
+        // 研究复用普通Agent能力：ordinaryTools快照run与普通任务共用同一份已启用技能清单；v1 run固定为空。
+        const enabledSkills = research
+            ? (researchOrdinaryTools.length ? collectEnabledSkillPaths(this.db, this.ownerOfRun(runId), grant.canonical_root) : [])
+            : collectEnabledSkillPaths(this.db, this.ownerOfRun(runId), grant.canonical_root);
         this.emit(runId, 'run.skills', { count: enabledSkills.length, names: enabledSkills.map(s => s.name).slice(0, 20) }, 'audit', attemptId);
         // 持久记忆（最小闭环）：索引与清单随bootstrap下发；工具读写经tool_proposed门禁，
         // 路径由监督器钉死 dataDir/memory/<projectId>（research视图与关闭记忆的账号不下发）
@@ -446,13 +477,16 @@ export class Supervisor {
         const bootstrap = {
             v: 1, attemptId, runId, nonce,
             research: research ? {view:research.view} : undefined,
+            // 研究普通工具策略（创建时冻结的能力快照）：runner据此下发普通只读工具；旧run缺省=旧受限视图
+            researchToolPolicy: research ? { ordinaryTools: this.research.ordinaryToolsForRun(runId) } : undefined,
             gatewayBaseUrl: this.opts.gateway.baseUrl,
             ticket: ticket.token,
             ticketExpiresAtMs: ticket.expiresAtMs,
             dirs: { home: dirs.home, scratch: dirs.scratch, tmp: dirs.tmp, session: dirs.session },
             grant: { id: grant.id, canonicalRoot: grant.canonical_root, access: grant.access, excludes: JSON.parse(grant.excludes_json) as string[] },
-            // 多文件夹项目：主要目录之外的附加工作目录随bootstrap下发，runner注入system prompt
-            additionalRoots: (this.db.db.prepare('SELECT canonical_root FROM workspace_grants WHERE project_id=? AND revoked_at IS NULL AND is_primary=0 AND id<>? ORDER BY created_at ASC, id ASC').all(run.project_id, grant.id) as unknown as Array<{ canonical_root: string }>).map(row => row.canonical_root),
+            // 多文件夹项目：主要目录之外的附加工作目录随bootstrap下发，runner注入system prompt；
+            // 研究v1 run不下发（旧受限视图不带workspace_roots块），ordinaryTools run与普通任务一致。
+            additionalRoots: research && !researchOrdinaryTools.length ? [] : (this.db.db.prepare('SELECT canonical_root FROM workspace_grants WHERE project_id=? AND revoked_at IS NULL AND is_primary=0 AND id<>? ORDER BY created_at ASC, id ASC').all(run.project_id, grant.id) as unknown as Array<{ canonical_root: string }>).map(row => row.canonical_root),
             approvalMode:isApprovalMode(snapshot.approvalMode)?snapshot.approvalMode:'auto',
             // 阶段④续聊：普通run在研究会话中携带研究上下文与执行交接验收项（runner渲染为平台注入块）
             researchContext: snapshot.researchContext,
@@ -495,7 +529,7 @@ export class Supervisor {
 
         const active: ActiveRun = {
             runId, attemptId, projectId: run.project_id, conversationId: run.conversation_id,
-            userId: '', sessionId, workspace: grant, subagentConfig:{...DEFAULT_SUBAGENT_SETTINGS,...snapshot.runtimeSettings?.subagent}, binding, proc: null, execChannel: null,
+            userId: '', sessionId, workspace: grant, sessionDir: dirs.session, subagentConfig:{...DEFAULT_SUBAGENT_SETTINGS,...snapshot.runtimeSettings?.subagent}, binding, proc: null, execChannel: null,
             abort: new AbortController(), startedAtMs: Date.now(), cancelTimer: null, nonce, nonceConfirmed: false,
             pendingApproval: null, status: 'running',
             objectiveSeq: manifest.objectiveSeq,
@@ -616,6 +650,63 @@ export class Supervisor {
             return result.status === 0 ? String(result.stdout ?? '').trim() : '';
         }
         catch { return ''; }
+    }
+
+    /** 读取runner登记的命令进程组（runtime/<attemptId>/session/runner-groups.json）。
+     * runner被SIGKILL时其退出钩子不会执行，该文件是外部清扫bash孙进程组的唯一依据。 */
+    private readRunnerGroups(attemptId: string): Array<{ pid: number; stamp: string }> {
+        try {
+            const parsed = JSON.parse(readFileSync(join(this.dataDir, 'runtime', attemptId, 'session', 'runner-groups.json'), 'utf8')) as unknown;
+            if (!Array.isArray(parsed)) return [];
+            return parsed.filter((entry): entry is { pid: number; stamp: string } =>
+                !!entry && typeof entry === 'object'
+                && Number.isSafeInteger((entry as { pid?: unknown }).pid) && Number((entry as { pid: number }).pid) > 0
+                && typeof (entry as { stamp?: unknown }).stamp === 'string')
+                .map(entry => ({ pid: Number(entry.pid), stamp: entry.stamp }));
+        }
+        catch { return []; }
+    }
+
+    /** 清扫runner登记的命令进程组：仅对身份戳一致（/bin/ps启动时间匹配）的组整组SIGKILL，防PID复用误杀；
+     * win32与无戳记录跳过（audit留痕，依赖taskkill /T树杀与runner自败兜底）。 */
+    private sweepRunnerGroups(attemptId: string, runId: string, reason: string): void {
+        const killed: number[] = [];
+        let skipped = 0;
+        for (const { pid, stamp } of this.readRunnerGroups(attemptId)) {
+            const liveStamp = this.processStartStamp(pid);
+            if (process.platform !== 'win32' && stamp && liveStamp && liveStamp === stamp && terminateProcessTree(pid, 'SIGKILL')) killed.push(pid);
+            else skipped += 1;
+        }
+        if (killed.length) this.emit(runId, 'runner.groups_swept', { attemptId, reason, killed, skipped }, 'audit', attemptId);
+    }
+
+    /** 启动对账时击杀上一世遗留的runner进程：本进程刚启动、active必为空，worker_instances仍标
+     * running/starting且run未终态的worker即遗留。按登记的pid+process_start_stamp身份核对后才击杀
+     * （防PID复用误杀）；win32与无戳记录跳过击杀（runner侧STDIN_EOF/心跳失败自败兜底），audit留痕。
+     * SIGTERM先行让runner退出钩子自清bash子进程组，5s后核尸仍在再SIGKILL并按登记文件清扫残留组。 */
+    private killStaleWorkersAtStartup(now: string): void {
+        const rows = this.db.db.prepare(`SELECT wi.id, wi.attempt_id, wi.pid, wi.process_start_stamp, pt.run_id
+            FROM worker_instances wi JOIN attempts a ON a.id=wi.attempt_id JOIN phase_tasks pt ON pt.id=a.phase_task_id JOIN runs r ON r.id=pt.run_id
+            WHERE wi.state IN ('running','starting') AND r.status NOT IN ('succeeded','failed','cancelled')`).all() as unknown as Array<{ id: string; attempt_id: string; pid: number; process_start_stamp: string; run_id: string }>;
+        for (const row of rows) {
+            const pid = Number(row.pid);
+            this.db.db.prepare(`UPDATE worker_instances SET state='lost', updated_at=? WHERE id=?`).run(now, row.id);
+            if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+            const stamp = this.processStartStamp(pid);
+            if (process.platform === 'win32' || !stamp || stamp !== row.process_start_stamp) {
+                if (stamp && row.process_start_stamp) this.emit(row.run_id, 'runner.stale_leftover', { pid, attemptId: row.attempt_id, message: '启动对账：遗留runner身份戳不符，跳过击杀请人工核对残留进程与副作用' }, 'audit', row.attempt_id);
+                continue;
+            }
+            this.emit(row.run_id, 'runner.stale_kill', { pid, attemptId: row.attempt_id, message: '启动对账发现上一世遗留runner，SIGTERM后核尸SIGKILL并清扫其命令进程组' }, 'audit', row.attempt_id);
+            terminateProcessTree(pid, 'SIGTERM');
+            const attemptId = row.attempt_id, runId = row.run_id;
+            setTimeout(() => {
+                if (this.processStartStamp(pid) === row.process_start_stamp) {
+                    terminateProcessTree(pid, 'SIGKILL');
+                    this.sweepRunnerGroups(attemptId, runId, 'stale_runner_sigkill');
+                }
+            }, 5_000).unref?.();
+        }
     }
 
     // —— agent通道帧处理 ——
@@ -805,20 +896,29 @@ export class Supervisor {
     private async handleToolProposed(active: ActiveRun, raw: unknown, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void): Promise<void> {
         const payload = raw as { toolName?: string; args?: Record<string, unknown>; parentInvocationId?: string; memoryOperationId?:string };
         if(this.research.isResearch(active.runId)){
-            this.research.checkBudget(active.attemptId,'tool');
-            const name=String(payload?.toolName??''),args=payload?.args??{},invocationId=randomUUID(),time=new Date().toISOString();
-            this.db.db.prepare("INSERT INTO tool_invocations(id,run_id,phase_task_id,attempt_id,call_key,tool_name,tool_version,args_hash,redacted_args_json,state,effect_kind,created_at,updated_at) VALUES (?,?,?,?,?,?,'v1',?,?,'claimed','read',?,?)").run(invocationId,active.runId,this.phaseTaskIdOf(active.attemptId),active.attemptId,invocationId,name,hashOfJson(args),JSON.stringify(args),time,time);
-            try{
-                const result=await this.research.tool(active.attemptId,name,args,this.ownerOfRun(active.runId));
-                this.db.db.prepare("UPDATE tool_invocations SET state='succeeded',result_json=?,updated_at=? WHERE id=?").run(JSON.stringify(result),new Date().toISOString(),invocationId);
-                this.emit(active.runId,'tool.completed',{invocationId,tool:name,ok:true,durationMs:Math.max(0,Date.now()-Date.parse(time)),summary:summarizeResult(result,true)},'public',active.attemptId);
-                respond(true,{result});
-            }catch(error){
-                this.db.db.prepare("UPDATE tool_invocations SET state='failed',error_code=?,updated_at=? WHERE id=?").run(error instanceof ApiError?error.code:'INTERNAL_ERROR',new Date().toISOString(),invocationId);
-                this.emit(active.runId,'tool.completed',{invocationId,tool:name,ok:false,durationMs:Math.max(0,Date.now()-Date.parse(time)),error:error instanceof ApiError?error.code:'INTERNAL_ERROR'},'public',active.attemptId);
-                throw error;
+            const requestedResearchTool = String(payload?.toolName ?? '');
+            // 研究普通工具策略（创建时冻结）：ordinaryTools清单内的只读工具走下方普通执行器门禁
+            // （同一toolSpec/账本/取消语义），研究预算先扣；写入/命令/记忆/产物发布不在清单，仍被拒。
+            if (this.research.ordinaryToolsForRun(active.runId).includes(requestedResearchTool)) {
+                this.research.checkBudget(active.attemptId,'tool');
             }
-            return;
+            else {
+                // 研究专用通道：research_read/research_search/web_*/verify_source/MCP冻结清单
+                this.research.checkBudget(active.attemptId,'tool');
+                const name=String(payload?.toolName??''),args=payload?.args??{},invocationId=randomUUID(),time=new Date().toISOString();
+                this.db.db.prepare("INSERT INTO tool_invocations(id,run_id,phase_task_id,attempt_id,call_key,tool_name,tool_version,args_hash,redacted_args_json,state,effect_kind,created_at,updated_at) VALUES (?,?,?,?,?,?,'v1',?,?,'claimed','read',?,?)").run(invocationId,active.runId,this.phaseTaskIdOf(active.attemptId),active.attemptId,invocationId,name,hashOfJson(args),JSON.stringify(args),time,time);
+                try{
+                    const result=await this.research.tool(active.attemptId,name,args,this.ownerOfRun(active.runId));
+                    this.db.db.prepare("UPDATE tool_invocations SET state='succeeded',result_json=?,updated_at=? WHERE id=?").run(JSON.stringify(result),new Date().toISOString(),invocationId);
+                    this.emit(active.runId,'tool.completed',{invocationId,tool:name,ok:true,durationMs:Math.max(0,Date.now()-Date.parse(time)),summary:summarizeResult(result,true)},'public',active.attemptId);
+                    respond(true,{result});
+                }catch(error){
+                    this.db.db.prepare("UPDATE tool_invocations SET state='failed',error_code=?,updated_at=? WHERE id=?").run(error instanceof ApiError?error.code:'INTERNAL_ERROR',new Date().toISOString(),invocationId);
+                    this.emit(active.runId,'tool.completed',{invocationId,tool:name,ok:false,durationMs:Math.max(0,Date.now()-Date.parse(time)),error:error instanceof ApiError?error.code:'INTERNAL_ERROR'},'public',active.attemptId);
+                    throw error;
+                }
+                return;
+            }
         }
         // 子代理子调用（块D）：parent须为本run在途的agent工具行，子调用与父并行登记，不受父行的busy阻塞；
         // 其余子调用声明一律视为普通提议（parent校验失败按无parent处理，走顺序门禁）
@@ -1078,6 +1178,9 @@ export class Supervisor {
                         throw new ApiError('BROWSER_UNAVAILABLE', '浏览器宿主不可用：内嵌浏览器需要桌面版运行');
                     if (spec.name === 'browser_screenshot' && !resolveVisionSupport(active.binding.protocol ?? 'openai-completions', active.binding.baseUrl, active.binding.modelId, active.binding.parameters?.advanced))
                         throw new ApiError('VALIDATION_FAILED', '当前模型不支持图片输入，请改用视觉模型');
+                    // 自动开面板公告：模型开始驱动浏览器即发事件，UI 据此切到浏览器 tab 全程可见。
+                    // 事件只进当前 run 的事件流——用户没在看的 run 不经前端订阅，天然不抢屏。
+                    this.emit(active.runId, 'browser.activity', { tool: spec.name }, 'public', active.attemptId);
                     result = await executeBrowserTool(this.opts.desktopBrowser, spec.name, args);
                     if (spec.name === 'browser_screenshot') {
                         const shot = result as { imageData: string; mime: string };
@@ -1387,6 +1490,8 @@ export class Supervisor {
         if (signal === 'SIGTERM' && process.platform !== 'win32') {
             setTimeout(() => { terminateProcessTree(pid, 'SIGKILL'); }, 5_000).unref?.();
         }
+        // SIGKILL升格时runner的退出钩子无法执行：按登记文件清扫其bash孙进程组（身份核对防误杀）。
+        if (signal === 'SIGKILL') this.sweepRunnerGroups(active.attemptId, active.runId, 'runner_sigkill_escalation');
     }
 
     private onRunnerExit(active: ActiveRun, code: number | null, signal: string | null, stderrTail: string): void {
@@ -1708,6 +1813,8 @@ export class Supervisor {
         this.userQuestions.recover();
         this.memoryLifecycle.recover();
         recoverMemoryLocks(this.dataDir);
+        // 状态对账前先处理上一世遗留的runner进程：按身份击杀+清扫其命令进程组（状态面随后照常对账）。
+        this.killStaleWorkersAtStartup(new Date().toISOString());
         const now = new Date().toISOString();
         const rows = this.db.db.prepare(`SELECT id, status FROM runs WHERE status NOT IN ('succeeded','failed','cancelled')`).all() as unknown as Array<{ id: string; status: string }>;
         for (const row of rows) {

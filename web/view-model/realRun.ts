@@ -48,6 +48,8 @@ export class RealRunSession {
  readonly todos=ref<Array<{id:string;position:number;content:string;status:string}>>([]);
  /** 子代理活动区刷新信号（subagent.message事件递增） */
  readonly subagentRevision=ref(0);
+ /** 浏览器活动信号（browser.activity事件递增）：模型驱动browser_*工具即递增，UI据此自动展开浏览器面板 */
+ readonly browserActivityRevision=ref(0);
  private todosGeneration=0;
  readonly streamingText=computed(()=>this.turns.value.find(t=>t.id===this.runId)?.segments.flatMap(s=>s.rows).slice().reverse().find((r):r is ConversationTextRow=>r.kind==='assistant'&&!!r.streaming)?.text??'');
  readonly charRate=ref<number|null>(null);readonly usage=ref<RealUsage|null>(null);
@@ -155,6 +157,7 @@ export class RealRunSession {
    if(event.type==='tool.completed'){delete this.details.value[String(event.payload.invocationId)];void this.refreshConversation();}
    if(event.type==='todo.updated')void this.refreshTodos();
    if(event.type==='subagent.message')this.subagentRevision.value++;
+   if(event.type==='browser.activity')this.browserActivityRevision.value++;
    if(event.type.startsWith('question.'))void this.refreshQuestions();
    if(['tool.awaiting_approval','approval.decided'].includes(event.type))void this.refreshApproval();
   }

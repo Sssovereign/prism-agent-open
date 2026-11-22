@@ -2,32 +2,22 @@
 import UiSelect from './UiSelect.vue';
 import ModeIcon from './ModeIcon.vue';
 import UiIcon from './UiIcon.vue';
-import ComposerAddMenu from './ComposerAddMenu.vue';
-import {computed,ref,watch} from 'vue';
+import {computed,onMounted,ref,watch} from 'vue';
 import type {ModelConfigView} from '../../contracts/models';
 import { toast } from '../ui/toast';
-export interface ResearchDecisionDraft { proposition:string;candidates:Array<{text:string}> }
+import { v1 } from '../api';
+import {DECISION_CANDIDATES_MAX,DECISION_CANDIDATES_MIN,normalizeDecision,type ResearchDecisionDraft} from '../view-model/research';
 export interface ResearchSubjectDraft { title:string;content:string }
 export interface ResearchCriterionDraft { text:string;mustHave:boolean }
-const props=defineProps<{mode:'debate'|'jury';configs:ModelConfigView[];models:Record<string,string>;binding:string;rounds:number;sourceText:string;sourceFiles:string[];decision:ResearchDecisionDraft|null;subject:ResearchSubjectDraft|null;criteria:ResearchCriterionDraft[];projectId?:string;fileProvider?:(path:string)=>Promise<{path:string;entries:Array<{name:string;type:'file'|'directory'}>}>}>();
-const emit=defineEmits<{(e:'update:models',value:Record<string,string>):void;(e:'update:rounds',value:number):void;(e:'update:sourceText',value:string):void;(e:'update:sourceFiles',value:string[]):void;(e:'update:decision',value:ResearchDecisionDraft|null):void;(e:'update:subject',value:ResearchSubjectDraft|null):void;(e:'update:criteria',value:ResearchCriterionDraft[]):void}>();
+const props=defineProps<{mode:'debate'|'jury';configs:ModelConfigView[];models:Record<string,string>;binding:string;rounds:number;sourceText:string;decision:ResearchDecisionDraft|null;subject:ResearchSubjectDraft|null;criteria:ResearchCriterionDraft[];mcpToolIds:string[];projectId?:string;objective?:string}>();
+const emit=defineEmits<{(e:'update:models',value:Record<string,string>):void;(e:'update:rounds',value:number):void;(e:'update:sourceText',value:string):void;(e:'update:decision',value:ResearchDecisionDraft|null):void;(e:'update:subject',value:ResearchSubjectDraft|null):void;(e:'update:criteria',value:ResearchCriterionDraft[]):void;(e:'update:mcpToolIds',value:string[]):void}>();
 const labels:Record<string,string>={pro:'正方',con:'反方',host:'主持',juror1:'陪审员一',juror2:'陪审员二',juror3:'陪审员三',aggregate:'汇总复核'};
 const actors=computed(()=>props.mode==='debate'?['pro','con','host']:['juror1','juror2','juror3','aggregate']);
 const options=computed(()=>props.configs.filter(c=>c.enabled).flatMap(c=>c.models.filter(m=>m.enabled).map(m=>({value:`${c.id}:${m.modelId}`,label:`${c.name} · ${m.displayName}`}))));
 function change(actor:string,value:string){emit('update:models',{...props.models,[actor]:value});}
-// 引用文件：UI发起、服务端按授权导入；这里只收集相对路径chips，去重与上限对齐后端约定
-const SOURCE_FILES_LIMIT=20;
-const sourceAnchor=ref<HTMLElement>();
-function addSourceFile(payload:{text:string;kind:string;path?:string}){
-  if(payload.kind!=='file'||!payload.path)return;
-  if(props.sourceFiles.includes(payload.path)){toast('该文件已在共同资料中',{variant:'info'});return;}
-  if(props.sourceFiles.length>=SOURCE_FILES_LIMIT){toast(`引用文件最多${SOURCE_FILES_LIMIT}个`,{variant:'warning'});return;}
-  emit('update:sourceFiles',[...props.sourceFiles,payload.path]);
-}
-function removeSourceFile(path:string){emit('update:sourceFiles',props.sourceFiles.filter(item=>item!==path));}
 // —— v2差异化表单：辩论「需要做决定」（候选2—6，含维持现状快捷项）；评审「被评对象+标准」（标准1—12，必达标记）——
 // 与后端 freezeProtocolConfig 的边界一致；ID由服务端创建时冻结分配，前端只收集文本与必达标记。
-const DECISION_CANDIDATES_MIN=2,DECISION_CANDIDATES_MAX=6,CRITERIA_MAX=12;
+const CRITERIA_MAX=12;
 const decisionOn=computed(()=>props.mode==='debate'&&props.decision!==null);
 function toggleDecision(on:boolean){
   emit('update:decision',on?{proposition:'',candidates:[{text:''},{text:'维持现状'}]}:null);
@@ -56,7 +46,26 @@ function quickAddStatusQuo(){
   if(props.decision.candidates.some(c=>c.text.trim()==='维持现状'))return;
   addCandidate('维持现状');
 }
-const candidateReady=computed(()=>!!props.decision&&props.decision.proposition.trim().length>0&&props.decision.candidates.filter(c=>c.text.trim()).length>=DECISION_CANDIDATES_MIN);
+// —— 能力扩展（设置归还自由度）：MCP=只读声明工具显式勾选。技能不再单独挑选——研究参与者
+// 与普通任务共用同一份已启用技能装配（服务端 collectEnabledSkillPaths）。
+// 候选清单在挂载时拉取；设置关闭或清单为空则整块不渲染（服务端仍会校验，UI只是不引导）。
+const mcpCandidates=ref<Array<{qualifiedName:string;serverName:string;toolName:string;description:string}>>([]);
+onMounted(async()=>{
+  if(!props.projectId)return;
+  try{
+    const settings=await v1<{researchMcpTools?:boolean}>('/api/v1/agent-settings');
+    if(settings.researchMcpTools!==false){
+      const candidates=await v1<{tools:Array<{qualifiedName:string;serverName:string;toolName:string;description:string}>}>('/api/v1/research/mcp-candidates');
+      mcpCandidates.value=candidates.tools;
+    }
+  }catch{ /* 候选拉取失败不阻塞研究设置；提交时服务端仍会校验 */ }
+});
+function toggleMcpTool(qualifiedName:string){
+  emit('update:mcpToolIds',props.mcpToolIds.includes(qualifiedName)?props.mcpToolIds.filter(id=>id!==qualifiedName):[...props.mcpToolIds,qualifiedName]);
+}
+// 折叠摘要与提交共用 normalizeDecision 单一事实源：命题回退议题、候选剔空、与后端校验同口径
+const decisionNormalized=computed(()=>normalizeDecision(props.decision,props.objective??''));
+const candidateReady=computed(()=>decisionNormalized.value.ready);
 function patchSubject(patch:Partial<ResearchSubjectDraft>){
   emit('update:subject',{title:props.subject?.title??'',content:props.subject?.content??'',...patch});
 }
@@ -83,7 +92,7 @@ const summary=computed(()=>{
   if(props.mode==='debate'){bits.push(`${props.rounds}轮交锋`);if(decisionOn.value)bits.push(candidateReady.value?'需做决定 · 候选已填':'需做决定 · 候选未填');}
   if(props.mode==='jury'){if(subjectReady.value)bits.push('已填被评对象');if(criteriaReady.value)bits.push(`评审标准 ${props.criteria.filter(c=>c.text.trim()).length} 项`);}
   if(props.sourceText.trim())bits.push('已附共同资料');
-  if(props.sourceFiles.length)bits.push(`引用文件 ${props.sourceFiles.length} 个`);
+  if(props.mcpToolIds.length)bits.push(`MCP 工具 ${props.mcpToolIds.length} 个`);
   return bits.join(' · ');
 });
 </script>
@@ -120,8 +129,9 @@ const summary=computed(()=>{
       <template v-if="decisionOn&&decision">
         <label class="decision-field">
           <span>决定命题</span>
-          <input type="text" :value="decision.proposition" maxlength="2000" placeholder="如：任务规划默认应采用哪种方案？" @input="patchDecision({proposition:($event.target as HTMLInputElement).value})" />
+          <input type="text" :value="decision.proposition" maxlength="2000" placeholder="留空则使用上方议题作为决定命题" @input="patchDecision({proposition:($event.target as HTMLInputElement).value})" />
         </label>
+        <p v-if="decisionNormalized.propositionFromObjective&&decisionNormalized.proposition" class="setup-note">未填命题时将使用上方议题「{{decisionNormalized.proposition.slice(0,60)}}{{decisionNormalized.proposition.length>60?'…':''}}」。</p>
         <div class="decision-candidates">
           <span class="decision-label">候选方案（至少{{DECISION_CANDIDATES_MIN}}项，最多{{DECISION_CANDIDATES_MAX}}项）</span>
           <div v-for="(candidate,index) in decision.candidates" :key="index" class="candidate-row">
@@ -132,7 +142,7 @@ const summary=computed(()=>{
             <button type="button" class="text-btn" @click="addCandidate()">+ 添加候选</button>
             <button v-if="!decision.candidates.some(c=>c.text.trim()==='维持现状')" type="button" class="text-btn" @click="quickAddStatusQuo()">+ 维持现状</button>
           </div>
-          <p class="setup-note">正反双方将围绕候选间的取舍展开论证；主持在汇总时交付「采用、试验或暂缓」之一。命题与候选发起后即冻结。</p>
+          <p class="setup-note">发起后冻结；主持将交付「采用/试验/暂缓」之一。</p>
         </div>
       </template>
     </div>
@@ -164,22 +174,27 @@ const summary=computed(()=>{
         <p class="setup-note">陪审员对每项标准独立给出「满足/未满足/证据不足」及理由；汇总只组织理由，票数由程序计算。</p>
       </div>
     </div>
+    <!-- 能力扩展：MCP 只读工具（发起时勾选冻结）。设置关闭或无候选时不渲染 -->
+    <div v-if="mcpCandidates.length" class="research-capabilities">
+      <div class="cap-block" data-testid="research-mcp">
+        <span class="decision-label">MCP 工具（可选；仅只读声明工具，发起时勾选冻结，结果须保存为资料才能引用）</span>
+        <div class="cap-tools" role="group" aria-label="勾选 MCP 工具">
+          <label v-for="tool in mcpCandidates" :key="tool.qualifiedName" class="cap-tool" :title="tool.description">
+            <input type="checkbox" :checked="mcpToolIds.includes(tool.qualifiedName)" @change="toggleMcpTool(tool.qualifiedName)" />
+            <span class="cap-tool-name">{{tool.serverName}} / {{tool.toolName}}</span>
+          </label>
+        </div>
+      </div>
+    </div>
     <div class="research-source">
       <div class="source-head">
         <span>共同资料（可选，最多20000字符/份）</span>
-        <div ref="sourceAnchor" class="source-add">
-          <ComposerAddMenu v-if="projectId" draft="" :new-task="false" :files-only="true" :project-id="projectId" image-disabled-reason="" :offer-goal="false" :anchor="()=>sourceAnchor" :file-provider="fileProvider" @insert="addSourceFile" />
-        </div>
       </div>
-      <textarea aria-label="共同资料" :value="sourceText" maxlength="20000" placeholder="用右上 + 引用项目文件（导入正文），或直接粘贴原文；来源与结论请分开描述。" @input="emit('update:sourceText',($event.target as HTMLTextAreaElement).value)" />
-      <ul v-if="sourceFiles.length" class="source-files" aria-label="引用的项目文件">
-        <li v-for="path in sourceFiles" :key="path" class="source-file-chip">
-          <span class="source-file-path" :title="path">{{path}}</span>
-          <button type="button" class="source-file-remove" :aria-label="`移除引用文件 ${path}`" @click="removeSourceFile(path)">×</button>
-        </li>
-      </ul>
+      <!-- 研究复用普通Agent能力：项目文件由参与者以只读工具直接查看（list_dir/grep_files/read_file），
+           显式图片附件经输入框附件入口上传（服务端创建时冻结并按角色核验视觉）；这里只收纯文本资料 -->
+      <textarea aria-label="共同资料" :value="sourceText" maxlength="20000" placeholder="直接粘贴研究资料原文；来源与结论请分开描述。项目文件可由参与者直接读取，重点图片材料请用输入框附件上传。" @input="emit('update:sourceText',($event.target as HTMLTextAreaElement).value)" />
     </div>
-    <p class="setup-note">引用的文件在发起研究时读取正文；网页读取可直接使用；关键词搜索需在设置中配置搜索服务。没有引证的结果会标明证据不足。</p>
+    <p class="setup-note">网页读取可直接使用；关键词搜索需在设置中配置搜索服务。没有引证的结果会标明证据不足。</p>
   </div>
   </div>
   </div>
@@ -228,14 +243,15 @@ const summary=computed(()=>{
 .candidate-actions{display:flex;gap:12px;flex-wrap:wrap}
 .jury-subject{display:flex;flex-direction:column;gap:10px}
 .research-source{display:flex;flex-direction:column;gap:6px}
+/* 能力扩展：MCP只读工具勾选清单，沿用资料区观感 */
+.research-capabilities{display:flex;flex-direction:column;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-s);background:var(--bg-card)}
+.cap-block{display:flex;flex-direction:column;gap:6px}
+.cap-tools{display:flex;flex-direction:column;gap:4px}
+.cap-tool{display:flex;align-items:center;gap:8px;font-size:var(--text-ui-sm);color:var(--fg);min-width:0;cursor:pointer}
+.cap-tool input{accent-color:var(--color-icon-blue,#508de0);flex:none}
+.cap-tool-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .source-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .source-head>span{font-size:var(--text-ui-sm);color:var(--fg-subtle)}
-.source-add{display:inline-flex;flex:none}
-.source-files{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
-.source-file-chip{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:3px 6px 3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--bg-card);font-size:var(--text-ui-sm);color:var(--fg)}
-.source-file-path{min-width:0;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.source-file-remove{display:inline-flex;align-items:center;justify-content:center;flex:none;width:18px;height:18px;padding:0;border:0;border-radius:999px;background:transparent;color:var(--fg-subtlest);cursor:pointer;font-size:13px;line-height:1}
-.source-file-remove:hover{background:var(--hover);color:var(--fg)}
 .research-source textarea{width:100%;min-width:0;min-height:64px;resize:vertical;border:1px solid var(--border);border-radius:var(--radius-s);background:var(--bg-input);color:var(--fg);padding:8px 10px;font-size:var(--text-ui-base);line-height:1.5}
 .research-source textarea::placeholder{color:var(--fg-subtlest)}
 .research-source textarea:focus{outline:none;border-color:var(--border-hover)}

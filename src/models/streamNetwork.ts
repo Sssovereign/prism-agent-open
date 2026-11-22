@@ -1,6 +1,6 @@
 import { request as httpsRequest } from 'node:https';
 import { ApiError } from '../../contracts/errors.js';
-import { assertPinnableRequest, resolvePinnedAddress } from './network.js';
+import { assertPinnableRequest, describeTransportError, resolvePinnedAddress } from './network.js';
 
 /**
  * 正式模型请求的受控真流式传输（计划v1.6 §5）。
@@ -58,7 +58,7 @@ export function streamingPinnedFetch(baseUrl: string, profile: StreamProfile): {
             let pendingError: ApiError | null = null;
             let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
             const failStream = (error: unknown) => {
-                const apiError = pendingError ?? (error instanceof ApiError ? error : new ApiError(signal.aborted ? 'MODEL_TIMEOUT' : 'PROVIDER_ERROR', signal.aborted ? '模型请求已取消或超时' : '模型响应中断，请重试'));
+                const apiError = pendingError ?? (error instanceof ApiError ? error : new ApiError(signal.aborted ? 'MODEL_TIMEOUT' : 'PROVIDER_ERROR', signal.aborted ? '模型请求已取消或超时' : `模型响应中断，请重试（${describeTransportError(error)}）`));
                 if (streamController) {
                     try { streamController.error(apiError); } catch { /* already closed */ }
                 }
@@ -70,7 +70,7 @@ export function streamingPinnedFetch(baseUrl: string, profile: StreamProfile): {
             const fail = (error: unknown) => {
                 if (settled) return;
                 settled = true;
-                rejectSetup(error instanceof ApiError ? error : new ApiError(signal.aborted ? 'MODEL_TIMEOUT' : 'PROVIDER_ERROR', signal.aborted ? '模型请求已取消或超时' : '无法连接接口，请检查地址和网络'));
+                rejectSetup(error instanceof ApiError ? error : new ApiError(signal.aborted ? 'MODEL_TIMEOUT' : 'PROVIDER_ERROR', signal.aborted ? '模型请求已取消或超时' : `无法连接接口，请检查地址和网络（${describeTransportError(error)}）`));
             };
             const destroyWith = (error: ApiError) => {
                 pendingError = error;
@@ -140,7 +140,7 @@ export function streamingPinnedFetch(baseUrl: string, profile: StreamProfile): {
             });
             request.on('error', error => {
                 if (connectTimer) clearTimeout(connectTimer);
-                fail(error instanceof ApiError ? error : undefined);
+                fail(error);
             });
             if (bytes) request.write(bytes);
             request.end();

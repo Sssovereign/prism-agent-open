@@ -1,10 +1,17 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
 import type {ChildProcess} from 'node:child_process';
 import {assertNavigableUrl, assertPanelRect, connectDesktopBrowserHost, executeBrowserTool, type DesktopBrowserHost} from '../src/agent/desktopBrowser.js';
 import {requiresApproval} from '../src/agent/approvalPolicy.js';
 import {TOOL_SPECS, toolSpec} from '../src/agent/toolExec.js';
+import {buildProductApp} from '../src/app.js';
+import {hashPassword} from '../src/auth/passwords.js';
+import {clearLoginFailures} from '../src/auth/routes.js';
 
 function fakeChild(): ChildProcess & { send: (message: unknown) => void; lastMessage: Record<string, unknown> | null } {
     const child = new EventEmitter() as unknown as ChildProcess & { send: (message: unknown) => void; lastMessage: Record<string, unknown> | null };
@@ -157,4 +164,69 @@ test('desktopBrowser 客户端：panel/state 往返与矩形校验', async () =>
     const hideId = (child.lastMessage as { requestId: string }).requestId;
     child.emit('message', { type: 'browser:panel-result', requestId: hideId, ok: true, result: { visible: false } });
     assert.deepEqual(await hiding, { visible: false });
+});
+
+// —— R3：面板地址栏命令路由（/api/v1/browser/command） ——
+
+async function makeUser(fx: ReturnType<typeof buildProductApp>, username: string, password: string): Promise<{ cookie: string; csrf: string }> {
+    const record = await hashPassword(password);
+    const uid = randomUUID();
+    const now = new Date().toISOString();
+    fx.db.tx(tx => tx.prepare('INSERT INTO users(id,username,password_hash,password_salt,password_params_json,disabled,created_at,updated_at) VALUES (?,?,?,?,?,0,?,?)')
+        .run(uid, username, record.hash, record.salt, record.paramsJson, now, now));
+    const login = await fx.app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username, password } });
+    const cookie = ((Array.isArray(login.headers['set-cookie']) ? String(login.headers['set-cookie'][0]) : String(login.headers['set-cookie']))).split(';')[0]!;
+    return { cookie, csrf: (login.json() as { data: { csrfToken: string } }).data.csrfToken };
+}
+
+test('browser 命令路由（R3 地址栏）：登录门禁、白名单、URL 校验、成功往返', async () => {
+    const calls: Array<{ method: string; args: Record<string, unknown> }> = [];
+    const fake: DesktopBrowserHost = {
+        available: true,
+        execute: async (method, args) => { calls.push({ method, args }); return { url: 'https://example.com/', title: 'Example Domain' }; },
+        panel: async () => ({ visible: false }),
+        state: async () => ({ visible: true, url: 'https://example.com/', title: 'Example Domain' }),
+        close() {},
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'prism-brcmd-'));
+    const fx = buildProductApp(dir, { serveWeb: false, desktopBrowser: fake });
+    try {
+        const { cookie, csrf } = await makeUser(fx, 'browser-cmd-user', 'browser-cmd-pass');
+        const headers = { cookie, 'x-csrf-token': csrf, 'content-type': 'application/json' };
+        // 能力查询透出宿主可用
+        const cap = await fx.app.inject({ method: 'GET', url: '/api/v1/browser', headers: { cookie } });
+        assert.equal(cap.statusCode, 200);
+        assert.equal((cap.json() as { data: { available: boolean } }).data.available, true);
+        // navigate 成功：URL 归一化后转发宿主
+        const nav = await fx.app.inject({ method: 'POST', url: '/api/v1/browser/command', headers, payload: { method: 'navigate', args: { url: 'https://example.com' } } });
+        assert.equal(nav.statusCode, 200);
+        assert.deepEqual((nav.json() as { data: unknown }).data, { url: 'https://example.com/', title: 'Example Domain' });
+        assert.deepEqual(calls[0], { method: 'navigate', args: { url: 'https://example.com/' } });
+        // back 白名单内
+        const back = await fx.app.inject({ method: 'POST', url: '/api/v1/browser/command', headers, payload: { method: 'back', args: {} } });
+        assert.equal(back.statusCode, 200);
+        assert.equal(calls[1]?.method, 'back');
+        // 模型工具面命令不对 UI 开放
+        const click = await fx.app.inject({ method: 'POST', url: '/api/v1/browser/command', headers, payload: { method: 'click', args: { ref: 1 } } });
+        assert.equal(click.statusCode, 400);
+        // navigate 复用监督器 URL 校验纪律：协议/私网 IP
+        const ftp = await fx.app.inject({ method: 'POST', url: '/api/v1/browser/command', headers, payload: { method: 'navigate', args: { url: 'ftp://example.com' } } });
+        assert.equal(ftp.statusCode, 400);
+        const priv = await fx.app.inject({ method: 'POST', url: '/api/v1/browser/command', headers, payload: { method: 'navigate', args: { url: 'http://127.0.0.1:8080/' } } });
+        assert.equal(priv.statusCode, 400);
+        assert.equal(calls.length, 2, '被拒导航不应转发宿主');
+        // 未登录 401
+        const anon = await fx.app.inject({ method: 'POST', url: '/api/v1/browser/command', payload: { method: 'back', args: {} } });
+        assert.equal(anon.statusCode, 401);
+        // 宿主不可用（纯 Web 环境）
+        const plain = buildProductApp(mkdtempSync(join(tmpdir(), 'prism-brcmd2-')), { serveWeb: false });
+        try {
+            const user2 = await makeUser(plain, 'browser-cmd-user2', 'browser-cmd-pass2');
+            const noHost = await plain.app.inject({ method: 'POST', url: '/api/v1/browser/command', headers: { cookie: user2.cookie, 'x-csrf-token': user2.csrf, 'content-type': 'application/json' }, payload: { method: 'back', args: {} } });
+            assert.equal(noHost.statusCode, 422);
+        } finally { await plain.app.close(); rmSync(join(tmpdir(), 'prism-brcmd2-'), { recursive: true, force: true }); }
+    } finally {
+        await fx.app.close();
+        rmSync(dir, { recursive: true, force: true });
+    }
 });

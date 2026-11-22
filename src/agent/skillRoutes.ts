@@ -19,7 +19,8 @@ export function registerSkillRoutes(app: FastifyInstance, db: Db): void {
         if (!/^[0-9a-f-]{36}$/.test(projectId)) throw new ApiError('VALIDATION_FAILED', 'projectId 不合法');
         const project = db.db.prepare('SELECT owner_user_id FROM projects WHERE id=?').get(projectId) as { owner_user_id: string } | undefined;
         if (!project || project.owner_user_id !== userId(req)) throw new ApiError('NOT_FOUND', '项目不存在或无权访问');
-        return (db.db.prepare('SELECT canonical_root FROM workspace_grants WHERE project_id=? AND revoked_at IS NULL ORDER BY created_at DESC,id DESC LIMIT 1').get(projectId) as {canonical_root:string}|undefined)?.canonical_root;
+        // 与执行侧（supervisor 的 primary grant 序）一致：先 primary 后创建序，多根项目同名技能展示与执行同一根。
+        return (db.db.prepare('SELECT canonical_root FROM workspace_grants WHERE project_id=? AND revoked_at IS NULL ORDER BY is_primary DESC, created_at DESC, id DESC LIMIT 1').get(projectId) as {canonical_root:string}|undefined)?.canonical_root;
     }
 
     app.get('/api/v1/skills', async (req, reply) => {

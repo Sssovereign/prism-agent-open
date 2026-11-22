@@ -2,11 +2,11 @@
   "upstream": "DeepSeek Harness",
   "version": "0.2.2-rc.2",
   "priorReferenceVersion": "0.2.2-rc.1",
-  "priorReferenceDirectory": "Local upstream reference archive (excluded from public export)",
+  "priorReferenceDirectory": "/Users/sove/毕业设计/02_文献资料/原始文献/本机Token监控源码_2026-11-11/dsh",
   "versionNote": "The requested rc.1 is preserved in the prior reference. The installed application archive actually contains rc.2 packages; newly extracted files are not rc.1.",
   "license": "MIT",
   "source": "/Applications/DeepSeek Harness.app/Contents/Resources/app.asar",
-  "referenceDirectory": "Local upstream reference archive (excluded from public export)",
+  "referenceDirectory": "/Users/sove/毕业设计/02_文献资料/原始文献/DSH_布局统计_2026-11-12",
   "adapted": [
     "StatsPills.tsx",
     "StatsPills.module.css",

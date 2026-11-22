@@ -81,10 +81,13 @@ test('agent prompt settings: normalize trims, enforces length, drops blanks and 
  assert.deepEqual(normalizeAgentPrompts({subagent:'  自定义  ',compaction:''}),{subagent:'自定义'});
  const long='x'.repeat(AGENT_PROMPT_MAX_CHARS+1);
  assert.deepEqual(normalizeAgentPrompts({mainAppend:long}),{mainAppend:'x'.repeat(AGENT_PROMPT_MAX_CHARS)});
- // 默认响应形状不含 prompts 键（既有 deepEqual 断言依赖；deepStrictEqual 校验键集）
- assert.deepEqual(normalizeAgentSettings({}),{autoCompaction:true,keepRecentTurns:3,memoryEnabled:true,subagent:{enabled:true,maxSteps:20,timeoutSeconds:120},askUserQuestionAutoResolutionEnabled:true});
+ // 默认响应形状不含 prompts 键（既有 deepEqual 断言依赖；deepStrictEqual 校验键集）；研究能力位缺省全开
+ const researchDefaults={researchMcpTools:true,researchSkillMethods:true,researchMemory:true,researchHostVerify:true,researchModelRequestLimit:240,researchToolRequestLimit:480};
+ assert.deepEqual(normalizeAgentSettings({}),{autoCompaction:true,keepRecentTurns:3,memoryEnabled:true,subagent:{enabled:true,maxSteps:20,timeoutSeconds:120},askUserQuestionAutoResolutionEnabled:true,...researchDefaults});
  const merged=normalizeAgentSettings({autoCompaction:false,keepRecentTurns:5,prompts:{subagent:'只查数据目录'}});
- assert.deepEqual(merged,{autoCompaction:false,keepRecentTurns:5,memoryEnabled:true,subagent:{enabled:true,maxSteps:20,timeoutSeconds:120},askUserQuestionAutoResolutionEnabled:true,prompts:{subagent:'只查数据目录'}});
+ assert.deepEqual(merged,{autoCompaction:false,keepRecentTurns:5,memoryEnabled:true,subagent:{enabled:true,maxSteps:20,timeoutSeconds:120},askUserQuestionAutoResolutionEnabled:true,prompts:{subagent:'只查数据目录'},...researchDefaults});
+ // 研究键显式写入与越界回退
+ assert.deepEqual(normalizeAgentSettings({researchMcpTools:false,researchModelRequestLimit:999,researchToolRequestLimit:10}),{...normalizeAgentSettings({}),researchMcpTools:false,researchModelRequestLimit:400,researchToolRequestLimit:60});
  assert.ok(DEFAULT_SUBAGENT_SYSTEM_PROMPT.includes('只读'));assert.ok(DEFAULT_COMPACTION_SYSTEM_PROMPT.includes('1200'));
 });
 const entry=(id:string,role:string,content:unknown):CompactEntry=>({id,type:'message',message:{role,content}});

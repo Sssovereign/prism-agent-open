@@ -5,7 +5,7 @@ import {deleteArchivedConversation} from '../src/projects/archive.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, chmodSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, chmodSync, statSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
@@ -18,6 +18,7 @@ import { ModelRequestRegistry } from '../src/agent/modelRequests.js';
 import { ModelGatewayServer } from '../src/agent/gatewayServer.js';
 import { Supervisor } from '../src/agent/supervisor.js';
 import { CredentialVault } from '../src/models/vault.js';
+import { saveAttachment } from '../src/agent/attachments.js';
 import { RUNTIME_STREAM_PROFILE } from '../src/models/streamNetwork.js';
 
 // —— 普通Agent真实执行链集成测试（计划v1.6 §12里程碑#1） ——
@@ -27,7 +28,7 @@ import { RUNTIME_STREAM_PROFILE } from '../src/models/streamNetwork.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const runnerEntry = fileURLToPath(new URL('../src/agent/runnerMain.js', import.meta.url));
 
-interface UpstreamState { memoryFailure?:'selector'|'extraction'|'slow-extraction'; researchInvalidOnce?:boolean; mode: 'tool_then_done' | 'slow' | 'error' | 'history' | 'research' | 'memory'; requests: string[];failure?:{status:number;message:string};subagentMode?:'reply'|'slow'|'loop';subagentAborted?:boolean;usageTokens?:number;customTool?:{name:string;args:Record<string,unknown>} }
+interface UpstreamState { memoryFailure?:'selector'|'extraction'|'slow-extraction'; researchInvalidOnce?:boolean; mode: 'tool_then_done' | 'slow' | 'error' | 'history' | 'research' | 'memory'; requests: string[];failure?:{status:number;message:string};subagentMode?:'reply'|'slow'|'loop';subagentAborted?:boolean;usageTokens?:number;customTool?:{name:string;args:Record<string,unknown>};toolQueue?:Array<{name:string;args:Record<string,unknown>}> }
 
 function sseData(payload: Record<string, unknown>): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -89,19 +90,22 @@ async function httpsFixture(t: { after(fn: () => unknown): unknown }, state: Ups
         try{const material=JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n')+2));records=Array.isArray(material)?material:material.records;}catch{ /* assertions below expose malformed input */ }
         const source=records.find(r=>r.kind==='source');
         if(!(parsed.messages??[]).some(m=>m.role==='tool')&&source){
-          res.write(chunk({role:'assistant',tool_calls:[{index:0,id:randomUUID(),type:'function',function:{name:state.customTool?.name??'research_read',arguments:JSON.stringify(state.customTool?.args??{recordId:source.id})}}]},'tool_calls',usage));
+          // toolQueue：按发起顺序逐阶段出队（研究场景多工具直测）；缺省回落customTool/默认research_read
+          const toolChoice=state.toolQueue?.length?state.toolQueue.shift()!:{name:state.customTool?.name??'research_read',args:state.customTool?.args??{recordId:source.id}};
+          res.write(chunk({role:'assistant',tool_calls:[{index:0,id:randomUUID(),type:'function',function:{name:toolChoice.name,arguments:JSON.stringify(toolChoice.args)}}]},'tool_calls',usage));
         }else{
           const claims=records.filter(r=>r.kind==='statement').flatMap(r=>JSON.parse(r.content).claims);
           const v2=prompt.includes('research-v2');
+          const taskCard=prompt.startsWith('[研究任务卡 ');
           const extra:Record<string,unknown>={};
           if(v2&&label.startsWith('juror')){
-            const criteria=JSON.parse(/评审标准（mustHave=true为必达条件）：(\[.*?\])。/.exec(prompt)?.[1]??'[]') as Array<{id:string;mustHave:boolean}>;
+            const criteria=JSON.parse((taskCard ? /^评审标准（mustHave=true为必达条件）：(\[.*\])。$/m : /评审标准（mustHave=true为必达条件）：(\[.*?\])。/).exec(prompt)?.[1]??'[]') as Array<{id:string;mustHave:boolean}>;
             const judge=label==='juror1'?'insufficient':'pass';
             extra.verdict=judge;
             extra.criterionEvaluations=criteria.map(c=>({criterionId:c.id,status:judge==='pass'&&c.mustHave?'satisfied':'insufficient',reason:'合成验收'}));
           }
           if(v2&&label==='host'&&prompt.includes('本议题需要做出决定')){
-            const candidates=JSON.parse(/候选方案（ID：文本）：(\[.*?\])。/.exec(prompt)?.[1]??'[]') as Array<{id:string}>;
+            const candidates=JSON.parse((taskCard ? /^候选方案（ID：文本）：(\[.*\])$/m : /候选方案（ID：文本）：(\[.*?\])。/).exec(prompt)?.[1]??'[]') as Array<{id:string}>;
             extra.disposition={kind:'adopt',candidateId:candidates[0]?.id,hardConstraints:'合成硬约束',basisClaimIds:claims.slice(0,4).map((c:{id:string})=>c.id)};
           }
           if(v2&&label==='aggregate'){extra.blockingItems=[];extra.nextSteps=['合成下一步'];}
@@ -727,7 +731,7 @@ test('0.0.2 research: 真实Pi辩论→陪审复核、受控工具、盲评与�
  assert.equal(await waitForStatus(h.db,jury.runId,['succeeded','failed'],60_000),'succeeded');
  assert.deepEqual(h.supervisor.research.report(jury.runId)!.tally,{pro:0,con:2,mixed:0,insufficient:1,abstain:0});
  const inputs=state.requests.slice(requestsBefore).map(r=>JSON.parse(r));
- for(const request of inputs){const text=JSON.stringify(request.messages);const tools=request.tools.map((x:{function:{name:string}})=>x.function.name).sort();if(text.includes('执行身份：juror')){assert.ok(!text.includes('HOST_SENTINEL'));assert.deepEqual(tools,['research_read','research_search','web_fetch','web_search']);}if(text.includes('执行身份：aggregate')){assert.ok(text.includes('HOST_SENTINEL'));assert.deepEqual(tools,['research_read','research_search']);}}
+ for(const request of inputs){const text=JSON.stringify(request.messages);const tools=request.tools.map((x:{function:{name:string}})=>x.function.name).sort();if(text.includes('执行身份：juror')){assert.ok(!text.includes('HOST_SENTINEL'));assert.deepEqual(tools,['research_read','research_search','web_fetch','web_search']);}if(text.includes('执行身份：aggregate')){assert.ok(text.includes('HOST_SENTINEL'));assert.deepEqual(tools,['research_read','research_search','verify_source']);}}
  assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM tool_invocations WHERE run_id IN (?,?) AND state='succeeded'").get(debate.runId,jury.runId)!.n,9);
  assert.equal(h.db.db.prepare('SELECT COUNT(*) n FROM usage_entries WHERE run_id IN (?,?)').get(debate.runId,jury.runId)!.n,18);
  assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
@@ -769,12 +773,220 @@ test('0.0.2 research: 真实Pi拒绝模型请求的隐藏文件工具，任务�
  assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM tool_invocations WHERE run_id=? AND tool_name='write_file'").get(run.runId)!.n,0);
 });
 
+test('research v1受限视图：项目规则、技能装配与附加工作目录不进入执行上下文',async t=>{
+ // P1修复：规则/技能/附加根属ordinaryTools能力束——固定v1 run必须维持旧受限视图，
+ // 否则旧研究的执行输入随主会话配置漂移（v1语义：初始提示不继承AGENTS.md、技能与附加目录）。
+ const state:UpstreamState={mode:'research',requests:[]},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024}),h.modelConfigId);
+ // 附加根已授权在场：v1 run也不得随workspace_roots注入
+ const extraRoot=mkdtempSync(join(tmpdir(),'t05-extra-'));
+ t.after(()=>rmSync(extraRoot,{recursive:true,force:true}));
+ const nowIso=new Date().toISOString();
+ h.db.db.prepare('UPDATE workspace_grants SET is_primary=1 WHERE project_id=?').run(h.projectId);
+ h.db.db.prepare(`INSERT INTO workspace_grants(id,project_id,canonical_root,access,revision,selected_by,is_primary,excludes_json,created_at,updated_at) VALUES (?,?,?,'write',1,?,0,'[]',?,?)`)
+  .run(randomUUID(),h.projectId,extraRoot,h.userId,nowIso,nowIso);
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},models=Object.fromEntries(['pro','con','host'].map(s=>[s,choice]));
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'debate',objective:'是否采用方案A',rounds:1,models,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}],policyVersion:'research-v1'});
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ const first=state.requests[0]!;
+ assert.ok(!first.includes('测试项目规则'),'v1研究不下发项目规则');
+ assert.ok(!first.includes('workspace_roots'),'v1研究不下发附加工作目录块');
+ const skillsEvent=h.db.db.prepare("SELECT payload_json FROM run_events WHERE run_id=? AND type='run.skills' ORDER BY seq LIMIT 1").get(run.runId) as {payload_json:string};
+ assert.equal(JSON.parse(skillsEvent.payload_json).count,0,'v1研究技能装配固定为空');
+ assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
+test('research v2普通工具真实链路：参与者经门禁读取项目文件，写入/命令/记忆不下发，规则与技能随装配',async t=>{
+ const state:UpstreamState={mode:'research',requests:[],customTool:{name:'read_file',args:{path:'notes.md'}}},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024}),h.modelConfigId);
+ writeFileSync(join(h.projectDir,'notes.md'),'项目笔记：方案A样本只有两组。\n');
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},models=Object.fromEntries(['pro','con','host'].map(s=>[s,choice]));
+ // v2 run（不固定policyVersion）：ordinaryTools=true，参与者携带普通只读工具与项目规则
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'debate',objective:'是否采用方案A',rounds:1,models,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}]});
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ const snap=JSON.parse((h.db.db.prepare('SELECT config_snapshot_json FROM runs WHERE id=?').get(run.runId) as {config_snapshot_json:string}).config_snapshot_json) as {researchCapabilities?:{ordinaryTools?:boolean}};
+ assert.equal(snap.researchCapabilities?.ordinaryTools,true);
+ // 首请求工具清单：研究工具+四个普通只读工具；副作用工具（write_file/bash/agent/memory_*）不下发
+ const first=JSON.parse(state.requests[0]!) as {messages:unknown;tools:Array<{function:{name:string}}>};
+ const tools=first.tools.map(x=>x.function.name);
+ for(const name of ['research_read','research_search','read_file','read_image','list_dir','grep_files'])assert.ok(tools.includes(name),`缺少工具${name}`);
+ for(const name of ['write_file','delete_file','bash','write_artifact','agent'])assert.ok(!tools.includes(name),`不应下发${name}`);
+ assert.ok(!tools.some(n=>n.startsWith('memory_')),'研究不下发记忆工具');
+ // 项目规则随bootstrap注入（AGENTS.md由harness预写）；技能装配事件不再固定为空
+ assert.ok(JSON.stringify(first.messages).includes('测试项目规则'));
+ const skillsEvent=h.db.db.prepare("SELECT payload_json FROM run_events WHERE run_id=? AND type='run.skills' ORDER BY seq LIMIT 1").get(run.runId) as {payload_json:string};
+ assert.ok(JSON.parse(skillsEvent.payload_json).count>0,'研究attempt应与普通任务共用已启用技能装配');
+ // 门禁分流：read_file走普通执行器登记成功并归属阶段任务；文件内容回流进模型消息
+ const row=h.db.db.prepare("SELECT state,phase_task_id FROM tool_invocations WHERE run_id=? AND tool_name='read_file'").get(run.runId) as {state:string;phase_task_id:string|null};
+ assert.equal(row.state,'succeeded');assert.ok(row.phase_task_id);
+ assert.ok(state.requests.some(r=>r.includes('项目笔记：方案A样本只有两组')));
+ // 普通工具与研究工具同一研究预算池（checkBudget对tool_invocations计数）
+ const used=(h.db.db.prepare("SELECT COUNT(*) n FROM tool_invocations WHERE run_id=? AND state='succeeded'").get(run.runId) as {n:number}).n;
+ const limit=(h.db.db.prepare('SELECT tool_request_limit FROM research_runs WHERE run_id=?').get(run.runId) as {tool_request_limit:number}).tool_request_limit;
+ assert.ok(used<=limit);assert.ok(used>=3,'至少三轮各一次工具调用');
+ assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
+test('research显式附件真实链路：无vision启动明确失败不降级，vision模型收到图片且base64不落库',async t=>{
+ const state:UpstreamState={mode:'research',requests:[]},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024}),h.modelConfigId);
+ // 真实32x32 PNG（Pi侧序列化要求可解码图片；saveAttachment只嗅探魔数但模型输入须完整字节）
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGPQqLhEU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAPHFyEwoyF0pAAAAAElFTkSuQmCC','base64');
+ const att=saveAttachment(h.db,h.dataDir,h.userId,'证据截图.png',png);
+ const base64=png.toString('base64');
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},models=Object.fromEntries(['pro','con','host'].map(s=>[s,choice]));
+ const input={userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'debate' as const,objective:'是否采用方案A',rounds:1,models,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}],attachmentIds:[att.id]};
+ // 场景一：角色模型无vision（创建时冻结）——创建阶段全角色预检整体拒绝（点名角色），不建run、不发模型请求；
+ // 前端可换模型或移除图片后重试。不允许先跑前面角色再在后面失败。
+ assert.throws(()=>h.supervisor.research.create(input),/不支持图片输入：pro、con、host/);
+ assert.equal(state.requests.length,0);
+ assert.equal(h.db.db.prepare('SELECT COUNT(*) n FROM runs').get()!.n,0);
+ assert.equal(h.db.db.prepare('SELECT COUNT(*) n FROM research_runs').get()!.n,0);
+ // 场景二：模型声明vision后新建研究——图片经bootstrap进入首请求，run正常完成
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024,advanced:{image:true}}),h.modelConfigId);
+ const run=h.supervisor.research.create(input);
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ assert.ok(state.requests[0]!.includes(base64.slice(0,32)),'图片字节应随首个模型请求下发');
+ // 契约红线：base64只存在于attempt bootstrap文件与进程内存，不落任何研究/审计表
+ const dbDump=JSON.stringify([
+  h.db.db.prepare('SELECT content FROM research_records').all(),
+  h.db.db.prepare('SELECT payload_json FROM run_events').all(),
+  h.db.db.prepare('SELECT result_json FROM tool_invocations').all(),
+  h.db.db.prepare('SELECT config_snapshot_json FROM runs').all(),
+ ]);
+ assert.ok(!dbDump.includes(base64.slice(0,32)),'附件base64不得落research_records/事件/工具结果/快照');
+ assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
+test('research v2技能清单真实链路：manifest进入模型上下文，正文不预注入，禁用技能不出现，read_file按需可读',async t=>{
+ const state:UpstreamState={mode:'research',requests:[]},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024}),h.modelConfigId);
+ // 项目技能两枚：alpha启用、beta禁用；SKILL.md正文带哨兵——正文不得整段注入初始prompt
+ const skillDir=join(h.projectDir,'.prism','skills','alpha-method');
+ mkdirSync(skillDir,{recursive:true});
+ const skillPath=join(skillDir,'SKILL.md');
+ writeFileSync(skillPath,'---\nname: alpha-method\ndescription: alpha论证方法说明\n---\nALPHA_BODY_SENTINEL 正文只应按需读取');
+ mkdirSync(join(h.projectDir,'.prism','skills','beta-method'),{recursive:true});
+ writeFileSync(join(h.projectDir,'.prism','skills','beta-method','SKILL.md'),'---\nname: beta-method\ndescription: beta禁用方法\n---\nBETA_BODY');
+ const {setSkillEnabled}=await import('../src/agent/skillCatalog.js');
+ setSkillEnabled(h.db,h.userId,'beta-method',false);
+ state.customTool={name:'read_file',args:{path:skillPath}};
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},models=Object.fromEntries(['pro','con','host'].map(s=>[s,choice]));
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'debate',objective:'是否采用方案A',rounds:1,models,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}]});
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ const first=state.requests[0]!;
+ // manifest真实进入模型上下文：技能名+description随<skills>区段到达（Pi available_skills同构，经read_file读取器说明）
+ assert.ok(first.includes('alpha-method'),'技能名应随manifest进入模型上下文');
+ assert.ok(first.includes('alpha论证方法说明'),'技能description应随manifest进入模型上下文');
+ assert.ok(first.includes('read_file'),'manifest应点名read_file作为读取入口');
+ // 正文不预注入：初始prompt不含SKILL.md正文哨兵
+ assert.ok(!first.includes('ALPHA_BODY_SENTINEL'),'技能正文不得整段注入初始prompt');
+ // 禁用技能不出现
+ assert.ok(!first.includes('beta-method'),'禁用技能不得进入manifest');
+ // R1修复：ordinaryTools运行的research systemPrompt不含“只能使用固定研究视图”矛盾句
+ assert.ok(!first.includes('只能使用固定研究视图'),'ordinaryTools运行不应声明固定视图限制');
+ assert.ok(first.includes('你是棱镜的研究 Agent'),'新版研究系统提示词已下发');
+ assert.ok(first.includes('[研究任务卡 research-task-card-v1]'),'真实模型请求应携带新版任务卡');
+ // 按需读取闭环：模型发起read_file(SKILL.md)→普通门禁执行→正文回流后续请求
+ const row=h.db.db.prepare("SELECT state,phase_task_id FROM tool_invocations WHERE run_id=? AND tool_name='read_file'").get(run.runId) as {state:string;phase_task_id:string|null};
+ assert.equal(row.state,'succeeded');
+ assert.ok(row.phase_task_id,'技能读取应归属研究阶段任务并计入审计');
+ assert.ok(state.requests.some(r=>r.includes('ALPHA_BODY_SENTINEL')),'正文应经read_file按需回流');
+ assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
+test('research v2项目按需读取直测：附加根read_file/list_dir/grep_files可达，路径不冒充研究记录，副作用仍拒',async t=>{
+ // D53边界映射：读取按本机账户权限（项目目录只是默认cwd，附加目录按绝对路径访问）；
+ // 研究门禁路径上仍拒绝的边界=研究专用通道只认视图内recordId（路径语义被拒）+副作用工具不存在（v2 runner不下发）。
+ const state:UpstreamState={mode:'research',requests:[],toolQueue:[
+  {name:'list_dir',args:{path:'.'}},
+  {name:'read_file',args:{path:'AGENTS.md'}},
+  {name:'grep_files',args:{pattern:'测试项目规则',path:'.'}},
+ ]},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024}),h.modelConfigId);
+ // 附加根：显式标记主目录is_primary=1后授权第二目录（migration 027语义）
+ const extraRoot=mkdtempSync(join(tmpdir(),'t05-extra-'));
+ t.after(()=>rmSync(extraRoot,{recursive:true,force:true}));
+ writeFileSync(join(extraRoot,'extra.md'),'附加目录EXTRA_MARKER内容\n');
+ const nowIso=new Date().toISOString();
+ h.db.db.prepare('UPDATE workspace_grants SET is_primary=1 WHERE project_id=?').run(h.projectId);
+ h.db.db.prepare(`INSERT INTO workspace_grants(id,project_id,canonical_root,access,revision,selected_by,is_primary,excludes_json,created_at,updated_at) VALUES (?,?,?,'write',1,?,0,'[]',?,?)`)
+  .run(randomUUID(),h.projectId,extraRoot,h.userId,nowIso,nowIso);
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},models=Object.fromEntries(['pro','con','host'].map(s=>[s,choice]));
+ const base={userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'debate' as const,objective:'是否采用方案A',rounds:1,models,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}]};
+ const run=h.supervisor.research.create(base);
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ // 主目录与附加根：list_dir覆盖cwd、read_file主目录、grep_files命中AGENTS.md规则——三者都经普通门禁记账成功
+ for(const name of ['list_dir','read_file','grep_files']){
+  const row=h.db.db.prepare("SELECT state,phase_task_id,result_json FROM tool_invocations WHERE run_id=? AND tool_name=?").get(run.runId,name) as {state:string;phase_task_id:string|null;result_json:string};
+  assert.equal(row.state,'succeeded',`${name}应经普通门禁执行成功`);
+  assert.ok(row.phase_task_id,`${name}应归属研究阶段任务`);
+ }
+ // 工具结果流回模型消息（规则内容与目录条目在第二轮请求中可见）
+ assert.ok(state.requests.some(r=>r.includes('测试项目规则')),'read_file结果应回流');
+ assert.ok(state.requests.some(r=>r.includes('AGENTS.md')),'list_dir条目应回流');
+ // workspace_roots块注入：主目录+附加根都到达模型提示
+ assert.ok(state.requests.some(r=>r.includes('workspace_roots')&&r.includes(extraRoot)),'附加目录应随workspace_roots注入');
+ // bootstrap效果直证：bootstrap.json被runner读后即删（base64只短暂存在），改以两个可观察效果断言——
+ // ①ordinaryTools清单生效=请求tools含四个普通只读工具；②additionalRoots生效=workspace_roots含附加根
+ const firstReq=JSON.parse(state.requests[0]!) as {tools:Array<{function:{name:string}}>};
+ const toolNames=firstReq.tools.map(x=>x.function.name);
+ for(const name of ['read_file','read_image','list_dir','grep_files'])assert.ok(toolNames.includes(name),`研究请求应下发${name}`);
+ for(const name of ['write_file','delete_file','bash','agent','write_artifact'])assert.ok(!toolNames.includes(name),`研究不应下发${name}`);
+ // 路径不冒充研究记录：research_read传越界路径语义的recordId被研究专用通道拒绝
+ state.toolQueue=[{name:'research_read',args:{recordId:'../../../outside-secret.txt'}}];
+ const run2=h.supervisor.research.create({...base,objective:'越界探测'});
+ assert.equal(await waitForStatus(h.db,run2.runId,['succeeded','failed'],60_000),'succeeded');
+ const escRow=h.db.db.prepare("SELECT state,error_code FROM tool_invocations WHERE run_id=? AND tool_name='research_read' AND state='failed'").get(run2.runId) as {state:string;error_code:string}|undefined;
+ assert.ok(escRow,'研究专用通道应拒绝非视图记录');
+ assert.ok(escRow!.error_code==='NOT_FOUND'||escRow!.error_code==='POLICY_DENIED',escRow?.error_code);
+ // 副作用边界：v2 run中write_file不在runner工具清单，pi报未知工具→无记账行、无文件产生，run仍完成
+ state.toolQueue=[{name:'write_file',args:{path:'escape.txt',content:'forbidden'}}];
+ const run3=h.supervisor.research.create({...base,objective:'尝试写文件'});
+ assert.equal(await waitForStatus(h.db,run3.runId,['succeeded','failed'],60_000),'succeeded');
+ assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM tool_invocations WHERE run_id=? AND tool_name='write_file'").get(run3.runId)!.n,0);
+ assert.equal(existsSync(join(h.projectDir,'escape.txt')),false);
+ assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
+test('research v2图片读取直测：read_image经门禁返回Pi原生image content，审计不落base64，无vision明确拒绝',async t=>{
+ // 正场景：vision模型经研究普通门禁读项目内图片→工具结果以data URL回流模型
+ const state:UpstreamState={mode:'research',requests:[],customTool:{name:'read_image',args:{path:'sample.png'}}},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ h.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024,advanced:{image:true}}),h.modelConfigId);
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR4nGPQqLhEU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAPHFyEwoyF0pAAAAAElFTkSuQmCC','base64');
+ writeFileSync(join(h.projectDir,'sample.png'),png);
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},models=Object.fromEntries(['pro','con','host'].map(s=>[s,choice]));
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'debate',objective:'是否采用方案A',rounds:1,models,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}]});
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ // read_image结果以Pi原生image content（data URL）进入后续模型请求
+ assert.ok(state.requests.at(-1)!.includes('data:image/png;base64,'),'图片应以Pi原生image content回流');
+ const row=h.db.db.prepare("SELECT state,phase_task_id,result_json FROM tool_invocations WHERE run_id=? AND tool_name='read_image' AND state='succeeded'").get(run.runId) as {state:string;phase_task_id:string|null;result_json:string};
+ assert.ok(row.phase_task_id,'read_image应归属研究阶段任务');
+ // 审计面剥图：结果JSON与research_records/事件均无base64
+ assert.ok(!row.result_json.includes(png.toString('base64').slice(0,32)),'审计result_json不得携带图片base64');
+ const dump=JSON.stringify([h.db.db.prepare('SELECT content FROM research_records').all(),h.db.db.prepare('SELECT payload_json FROM run_events').all()]);
+ assert.ok(!dump.includes(png.toString('base64').slice(0,32)));
+ // 反场景：无vision模型→read_image明确拒绝（不静默返回文本占位），run仍按脚本完成
+ const state2:UpstreamState={mode:'research',requests:[],customTool:{name:'read_image',args:{path:'sample.png'}}},h2=await buildHarness(t,await httpsFixture(t,state2));
+ h2.db.db.prepare('UPDATE model_entries SET parameters_json=? WHERE config_id=?').run(JSON.stringify({contextWindow:131072,maxOutputTokens:1024}),h2.modelConfigId);
+ const choice2={modelConfigId:h2.modelConfigId,modelId:'test-model'},models2=Object.fromEntries(['pro','con','host'].map(s=>[s,choice2]));
+ const run2=h2.supervisor.research.create({userId:h2.userId,sessionId:h2.sessionId,projectId:h2.projectId,mode:'debate',objective:'是否采用方案A',rounds:1,models:models2,sources:[{title:'样本资料',content:'方案A成本下降10%，但样本只有两组。'}]});
+ assert.equal(await waitForStatus(h2.db,run2.runId,['succeeded','failed'],60_000),'succeeded');
+ const fail=h2.db.db.prepare("SELECT state,error_code FROM tool_invocations WHERE run_id=? AND tool_name='read_image' AND state='failed'").get(run2.runId) as {state:string;error_code:string};
+ assert.ok(fail,'无vision模型的read_image应失败');
+ assert.ok(!state2.requests.at(-1)!.includes('data:image/png;base64,'),'无vision不得返回图片content');
+ assert.equal(h.db.db.prepare('PRAGMA foreign_key_check').all().length,0);
+});
+
 test('research: 真实Pi对超过600KB资料完成三份独立初判及汇总，网关输入保持有界',async t=>{
  const state:UpstreamState={mode:'research',requests:[]},h=await buildHarness(t,await httpsFixture(t,state));
  const choice={modelConfigId:h.modelConfigId,modelId:'test-model'},content='样本只有两组。'+'资料'.repeat(9_990);
  const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'jury',objective:'大资料独立评审',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:Array.from({length:12},(_,i)=>({title:`完整资料${i}`,content})),policyVersion:'research-v1'});
  assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
- const report=h.supervisor.research.report(run.runId)!;assert.equal(report.execution,'complete');assert.equal(report.evidenceCount,3);
+ const report=h.supervisor.research.report(run.runId)!;assert.equal(report.execution,'complete');
+ // ≥3：三名陪审员各引证一次；v2装配下汇总的目录预算是字节级边界，目录里挤进source元数据条目时
+ // 汇总者会经research_read取回原文并合法引证（+1），挤不进则不引证——两种都是正确装配行为。
+ assert.ok(report.evidenceCount>=3);
  const records=h.supervisor.research.records(run.runId);assert.ok(Buffer.byteLength(JSON.stringify(records))>600_000);
  assert.equal(records.filter(r=>r.kind==='opinion').length,3);assert.ok(records.filter(r=>r.kind==='source').every(r=>r.content===content));
  assert.ok(state.requests.every(body=>body.length<100_000));
@@ -806,11 +1018,16 @@ test('0.0.2 research: 真实执行身份的控制通道拒绝文件工具，取�
 });
 
 
-test('0.0.2 research: 无效引文触发有界格式修复，保留拒绝记录且不发布假证据',async t=>{
+test('research: 新任务卡无效引文收到局部修复提示，保留拒绝记录且不发布假证据',async t=>{
  const state:UpstreamState={mode:'research',requests:[],researchInvalidOnce:true},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
  const choice={modelConfigId:h.modelConfigId,modelId:'test-model'};
- const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'jury',objective:'格式修复验收',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:[{title:'原文',content:'样本只有两组'}],policyVersion:'research-v1'});
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'jury',objective:'格式修复验收',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:[{title:'原文',content:'样本只有两组'}],subject:{title:'测试对象',content:'测试材料'},criteria:[{id:'s1',text:'样本充分',mustHave:true}]});
  assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ const repair=state.requests.flatMap(request=>(JSON.parse(request).messages as Array<{role:string;content:unknown}>)).find(message=>message.role==='user'&&typeof message.content==='string'&&message.content.startsWith('上次提交未通过校验：'));
+ assert.ok(repair,'修复请求应包含新版局部反馈');
+ assert.match(String(repair.content),/引文必须逐字匹配/);
+ assert.doesNotMatch(String(repair.content),/研究任务卡|研究记录目录/);
+ assert.ok(String(repair.content).length<600,'修复消息不重复发送任务卡或资料');
  assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM run_events WHERE run_id=? AND type='research.delivery.rejected'").get(run.runId)!.n,1);
  assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM evidence WHERE run_id=? AND excerpt='fake'").get(run.runId)!.n,0);
  assert.equal(h.db.db.prepare('SELECT COUNT(*) n FROM attempts a JOIN phase_tasks pt ON pt.id=a.phase_task_id WHERE pt.run_id=?').get(run.runId)!.n,4);

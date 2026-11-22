@@ -9,7 +9,7 @@ const data=path.resolve(arg('--data')),bundled=path.resolve(arg('--bundled')),no
 const info=JSON.parse(fs.readFileSync(arg('--host-info'))),id=arg('--release-id'),phase=arg('--phase');
 const local=process.argv.includes('--local-feed');
 if(local&&(!data.replaceAll('\\','/').includes('/.cache/verification/')||!out.replaceAll('\\','/').includes('/.cache/verification/')))throw Error('本地更新源仅允许隔离验收数据');
-const feed=local?{localFeedUrl:arg('--local-feed'),localFeedAssetBase:arg('--asset-base')}:{githubRepo:'Sssovereign/prism-agent-releases'};
+const feed=local?{localFeedUrl:arg('--local-feed'),localFeedAssetBase:arg('--asset-base')}:{githubRepo:'Sssovereign/prism-agent-open'};
 const updater=new PrismUpdater({userDataDir:data,hostIdentity:{...info,platform:process.platform,arch:process.arch,channel:'beta',hostVersion:info.hostVersion},feed});
 const active=updater.store.readState().activeReleaseId;if(active)updater.host.businessVersion=updater.store.readReleaseRecord(active)?.manifest?.productVersion??info.businessVersion;
 fs.mkdirSync(out,{recursive:true,mode:0o700});

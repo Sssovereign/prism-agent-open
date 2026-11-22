@@ -91,6 +91,15 @@ function isLoopback(ip: string): boolean {
     if (family === 6) return ip === '::1';
     return false;
 }
+/** 传输层原始错误摘述：优先errno code（ECONNRESET等，弱网分类器按此识别瞬态），
+ * 无code回退message；包进自身错误文案时必须保留，否则pi与监督器的瞬态重试全部失明。 */
+export function describeTransportError(error: unknown): string {
+    if (error instanceof Error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        return (typeof code === 'string' && code ? code : error.message).slice(0, 80);
+    }
+    return String(error).slice(0, 80);
+}
 /** DNS answers are checked then pinned to the TLS connection; redirects are never followed. */
 export function pinnedFetch(baseUrl: string): typeof fetch {
     const base = new URL(baseUrl);
@@ -120,10 +129,10 @@ export function pinnedFetch(baseUrl: string): typeof fetch {
                 response.on('end', () => { const headers = new Headers(); for (const [key, value] of Object.entries(response.headers))
                     if (value !== undefined)
                         headers.set(key, Array.isArray(value) ? value.join(', ') : value); resolve(new Response(Buffer.concat(chunks), { status: response.statusCode ?? 502, headers })); });
-                response.on('error', () => reject(new ApiError('PROVIDER_ERROR', '模型响应中断，请重试')));
+                response.on('error', (error: unknown) => reject(new ApiError('PROVIDER_ERROR', `模型响应中断，请重试（${describeTransportError(error)}）`)));
             });
             request.setTimeout(20000, () => request.destroy(new Error('TIMEOUT')));
-            request.on('error', () => reject(new ApiError(req.signal.aborted ? 'MODEL_TIMEOUT' : 'PROVIDER_ERROR', req.signal.aborted ? '连接测试已取消或超时' : '无法连接接口，请检查地址和网络')));
+            request.on('error', (error: unknown) => reject(new ApiError(req.signal.aborted ? 'MODEL_TIMEOUT' : 'PROVIDER_ERROR', req.signal.aborted ? '连接测试已取消或超时' : `无法连接接口，请检查地址和网络（${describeTransportError(error)}）`)));
             if (bytes)
                 request.write(bytes);
             request.end();

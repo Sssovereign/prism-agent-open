@@ -121,8 +121,9 @@ const config = {
   directories: { app: appDir, output: out, buildResources: join(root, 'resources', 'desktop') },
   asar: true, npmRebuild: false,
   // publish 配置只为生成 app-update.yml 与 latest*.yml（electron-updater 静默更新元数据）；
+  // 发行目标为公开一体仓（源码+Release，2026-11-23 自 prism-agent-releases 迁入）；
   // 打包禁用自动上传，发行统一经 scripts/release/publish-release.mjs 核对。
-  publish: { provider: 'github', owner: 'Sssovereign', repo: 'prism-agent-releases' },
+  publish: { provider: 'github', owner: 'Sssovereign', repo: 'prism-agent-open' },
   toolsets: { nsis: '1.2.1', winCodeSign: '1.1.0' },
   // desktop/*.cjs 整体进包并排除 *.test.cjs：逐个白名单漏过 context-menu.cjs，导致 0.1.1-beta 启动即炸。
   files: ['desktop/*.cjs', '!desktop/*.test.cjs', 'desktop/build-info.json', 'desktop/updates/**', 'package.json'],
@@ -141,11 +142,21 @@ const config = {
   win: { target: ['nsis'], icon, signExecutable: false,
     extraResources: ['node.exe', 'node_modules', 'npm.cmd', 'npx.cmd'].map(file => ({ from: join(runtime, file), to: `runtime/${file}` })),
     artifactName: 'Prism-Setup-${version}-win-${arch}.${ext}' },
-  // oneClick 一键安装：更新时 electron-updater /S 静默覆盖原目录并自动重启（对齐 ZCode/DSH）。
-  nsis: { oneClick: true, perMachine: false, createDesktopShortcut: true,
-    createStartMenuShortcut: true, shortcutName: '棱镜 Prism', deleteAppDataOnUninstall: false,
+  // assisted 安装向导（对齐 ZCode/主流 Windows 安装器）：语言选择页 + 可选安装目录。
+  // 更新静默路径不受影响：electron-updater quitAndInstall(true,true) 以 /S 调起 NSIS
+  // （assisted 包同样支持 /S），沿注册表 InstallLocation 覆盖原目录并自动重启；
+  // 0.0.4–0.1.0-beta 即 assisted 向导与静默更新并存。此配置由
+  // desktop/installer-config.test.cjs 与下方发行门禁双重钉死，防止再次被静默移除。
+  nsis: { oneClick: false, perMachine: false, allowElevation: true, allowToChangeInstallationDirectory: true,
+    createDesktopShortcut: true, createStartMenuShortcut: true, shortcutName: '棱镜 Prism', deleteAppDataOnUninstall: false,
     installerLanguages: ['zh_CN', 'en_US'], language: '2052', runAfterFinish: true },
 };
+// 发行门禁（前置）：Windows 安装器必须保持 assisted 向导。99d4e0c 曾在 R81 把
+// oneClick:false 静默改成 true，0.1.1-beta 起用户失去自定义安装目录——此断言让
+// 回归在打包当场报错并指回钉死测试。
+for (const [key, expected] of Object.entries({ oneClick: false, perMachine: false, allowElevation: true, allowToChangeInstallationDirectory: true })) {
+  if (config.nsis[key] !== expected) throw new Error(`nsis.${key} 必须为 ${expected}——assisted 安装向导已钉死（见 desktop/installer-config.test.cjs）`);
+}
 const buildTargets = new Map();
 const requested = targets.filter(t => t === 'mac' || t === 'win');
 if (!requested.length || requested.includes('mac')) buildTargets.set(Platform.MAC, new Map([[Arch.arm64, ['dmg', 'zip']]]));
@@ -174,7 +185,8 @@ function checkAsarRequires(asarPath) {
   }
   if (missing.length) throw new Error(`asar 缺少被 require 的模块（0.1.1-beta 同类缺陷）：\n${missing.join('\n')}`);
 }
-const gate = { asarIntegrity: [], smoke: null };
+const gate = { asarIntegrity: [], smoke: null,
+  installer: { windowsNsis: { oneClick: config.nsis.oneClick, allowToChangeInstallationDirectory: config.nsis.allowToChangeInstallationDirectory } } };
 for (const [platform, asarPath] of [
   ['mac', join(out, 'mac-arm64', 'Prism.app', 'Contents', 'Resources', 'app.asar')],
   ['win', join(out, 'win-unpacked', 'resources', 'app.asar')],
