@@ -83,10 +83,11 @@ test('research: 假引文、越界引证、重复主张和越界回应均不能�
  const h=fixture(t);h.create();
  for(const claim of [
  {key:'c1',text:'伪造',evidence:[{sourceId:h.kernel.visible(h.attempt())[0]!.id,quote:'收益100%'}]},
- {key:'c1',text:'越界',evidence:[{sourceId:randomUUID(),quote:'样本只有两组'}]},
+ // 越界sourceId配不存在的引文仍拒；配真实引文的越界sourceId已改走归属自愈（见唯一命中修正归属测试）
+ {key:'c1',text:'越界',evidence:[{sourceId:randomUUID(),quote:'资料中不存在的句子'}]},
  {key:'c1',text:'越界回应',evidence:[],respondsTo:['private:c1']},
  ])assert.throws(()=>h.complete({claims:[claim]}),/引文|回应/);
- const claim=h.submission().claims[0]!;assert.throws(()=>h.complete({claims:[claim,claim]}),/编号/);
+ const claim=h.submission().claims[0]!;assert.throws(()=>h.complete({claims:[claim,claim]}),/重复/);
  assert.equal(h.kernel.records(h.context().phase.run_id).filter(r=>r.kind==='statement').length,0);
 });
 test('research: 引文逐字匹配容忍CJK邻接空白（标签折行空格），实质改写仍拒绝',t=>{
@@ -98,10 +99,69 @@ test('research: 引文逐字匹配容忍CJK邻接空白（标签折行空格）�
  h.complete({claims:[{key:'c1',text:'成本与样本',evidence:[{sourceId:src.id,quote:'成本下降10%，样本只有两组'}]}]});
  h.advance(h.context().phase.run_id);
  // 实质改写（丢字/换词）仍拒绝，反编造性质不变
- assert.throws(()=>h.complete({claims:[{key:'c3',text:'丢字改写',evidence:[{sourceId:src.id,quote:'盘后披露超2亿元回购增持计划公告'}]}]}),/逐字匹配/);
- assert.throws(()=>h.complete({claims:[{key:'c4',text:'换词改写',evidence:[{sourceId:src.id,quote:'成本下降10个百分点，样本只有两组'}]}]}),/逐字匹配/);
+ assert.throws(()=>h.complete({claims:[{key:'c3',text:'丢字改写',evidence:[{sourceId:src.id,quote:'盘后披露超2亿元回购增持计划公告'}]}]}),/逐字校验/);
+ assert.throws(()=>h.complete({claims:[{key:'c4',text:'换词改写',evidence:[{sourceId:src.id,quote:'成本下降10个百分点，样本只有两组'}]}]}),/逐字校验/);
  // 制表符折行容忍
  h.complete({claims:[{key:'c2',text:'回购增持',evidence:[{sourceId:src.id,quote:'盘后披露超2亿元回购或增持计划公告'}]}]});
+});
+test('research: 引文挂错资料按唯一命中修正归属，零/多命中拒绝并给定位（2026-11-23反方三连拒）',t=>{
+ const h=fixture(t);
+ h.create('debate',{sources:[{title:'原始资料',content:'方案A成本下降10%，但样本只有两组。'},{title:'第二资料',content:'方案A成本下降10%是卖点。方案B采用不同样本设计。'}]});
+ const sources=h.kernel.visible(h.attempt()).filter(r=>r.kind==='source');
+ const srcA=sources.find(s=>s.content.includes('样本只有两组'))!,srcB=sources.find(s=>s.id!==srcA.id)!;
+ // 实机形态：句子出自srcA却挂srcB → 修正归属后通过，落库证据指向实际出处
+ h.complete({claims:[{key:'c1',text:'样本限制',evidence:[{sourceId:srcB.id,quote:'样本只有两组'}]}]});
+ const statement=h.kernel.records(h.context().phase.run_id).find(r=>r.kind==='statement')!;
+ assert.equal((JSON.parse(statement.content) as {claims:Array<{evidence:Array<{sourceId:string}>}>}).claims[0]!.evidence[0]!.sourceId,srcA.id,'证据归属应修正为实际出处');
+ h.advance(h.context().phase.run_id);
+ // 零命中：拒绝文案点名主张与资料标题，修复轮可据此直接改对
+ assert.throws(()=>h.complete({claims:[{key:'c2',text:'编造',evidence:[{sourceId:srcA.id,quote:'视野里不存在的句子'}]}]}),error=>{
+  assert.match((error as Error).message,/主张c2的引文未通过逐字校验.*没有这段原文/);
+  const diagnostic=(error as import('../contracts/errors.js').ApiError).details?.researchDelivery as import('../contracts/research.js').ResearchDeliveryDiagnostic;
+  assert.equal(diagnostic.category,'citation');assert.equal(diagnostic.path,'claims[].evidence[]');assert.equal(diagnostic.repairable,true);
+  assert.ok(!JSON.stringify(diagnostic).includes('视野里不存在的句子'));
+  return true;
+ });
+ // 多命中：同句出现在两份资料，引用视野外sourceId无法唯一归属仍拒绝
+ assert.throws(()=>h.complete({claims:[{key:'c3',text:'歧义',evidence:[{sourceId:'not-in-view',quote:'方案A成本下降10%'}]}]}),/多份资料/);
+});
+test('research: 短key自愈补全阶段前缀（respondsTo唯一命中），主持短claimId歧义拒绝并点名可用id',t=>{
+ const h=fixture(t);h.create();
+ const src=h.kernel.visible(h.attempt()).find(x=>x.kind==='source')!;
+ const claim=(key:string)=>({key,text:`${key}主张`,evidence:[{sourceId:src.id,quote:'样本只有两组'}]});
+ // opening_pro(c1) → opening_con(c2)：opening阶段对方初稿不可见，回应自愈在可见轮验证
+ h.complete({claims:[claim('c1')]});
+ h.advance(h.context().phase.run_id);
+ h.complete({claims:[claim('c2')]});
+ h.advance(h.context().phase.run_id);
+ // round_1_pro：respondsTo 写短key 'c2' → 唯一命中 opening_con 主张，补全为完整ID
+ h.complete({claims:[{...claim('c1'),respondsTo:['c2']}]});
+ const statements=h.kernel.records(h.context().phase.run_id).filter(r=>r.kind==='statement');
+ const ocClaimId=(JSON.parse(statements[1]!.content) as {claims:Array<{id:string}>}).claims[0]!.id;
+ const r1pResponds=(JSON.parse(statements[2]!.content) as {claims:Array<{respondsTo:string[]}>}).claims[0]!.respondsTo;
+ assert.equal(r1pResponds[0],ocClaimId,'短key应补全为完整阶段前缀ID');
+ h.advance(h.context().phase.run_id);
+ // round_1_con(c1) 后进主持：已知主张里 c1 尾段命中3个全id → 短key歧义拒绝并点名可用主张
+ h.complete({claims:[claim('c1')]});
+ h.advance(h.context().phase.run_id);
+ const sub=h.submission();
+ assert.throws(()=>h.complete({objections:sub.objections!.map((o,i)=>i===0?{...o,claimId:'c1'}:o)}),/主张处理记录无效.*当前可用主张/);
+ // 全id提交照常通过
+ assert.doesNotThrow(()=>h.complete({objections:sub.objections}));
+});
+test('research: 字段级拒绝文案点名现值；摘要超限截断自愈',t=>{
+ const h=fixture(t);h.create();
+ const seventeen=Array.from({length:17},(_,i)=>({key:`k${i+1}`,text:'主张',evidence:[]}));
+ assert.throws(()=>h.complete({claims:seventeen}),/claims超过16条（当前17条）/);
+ assert.throws(()=>h.complete({text:'长'.repeat(40_001)}),/正文text超过40000字符（当前40001）/);
+ // 摘要700字 → 截断到600发布，不再烧修复额度
+ h.complete({summary:'摘'.repeat(700)});
+ const statement=h.kernel.records(h.context().phase.run_id).find(r=>r.kind==='statement')!;
+ assert.equal((JSON.parse(statement.content) as {summary:string}).summary.length,600);
+});
+test('research v2: 票型文案与校验枚举同形（照中文票名写被拒并给出字面量）',t=>{
+ const h=fixture(t),r=h.createV2('jury');
+ assert.throws(()=>h.complete({...h.v2Juror('pass'),verdict:'通过' as unknown as 'pass'}),/票型字面量.*pass\|conditional_pass\|fail\|insufficient\|abstain/);
 });
 test('research: JSON容错吸收数组闭括号句点与重复对象，截断仍拒绝',t=>{
  const h=fixture(t);h.create();
@@ -262,11 +322,14 @@ test('research: 等待用户恢复的闲置时间不消耗执行预算',t=>{
  const h=fixture(t),r=h.create();h.db.db.prepare("UPDATE runs SET created_at='2020-01-01T00:00:00Z' WHERE id=?").run(r.runId);assert.doesNotThrow(()=>h.kernel.checkBudget(h.attempt(),'model'));
 });
 
-test('research: 摘要可选、超限拒绝，规范报告记录最终摘要，历史缺摘要回退正文',t=>{
+test('research: 摘要可选、超限截断自愈，规范报告记录最终摘要，历史缺摘要回退正文',t=>{
  const h=fixture(t),r=h.create();
- assert.throws(()=>h.complete({summary:'x'.repeat(601)}),/摘要/);
+ // 超限截断自愈（2026-11-24）：摘要超600截断到600发布，不烧修复额度
  assert.throws(()=>h.complete({summary:'   '}),/摘要/);
- h.complete({summary:'本轮核心：方案A样本不足。'});
+ h.complete({summary:`本轮核心：方案A样本不足。${'摘'.repeat(700)}`});
+ const statement=h.kernel.records(r.runId).find(x=>x.kind==='statement')!;
+ assert.ok(statement.content.includes('样本不足'));
+ assert.equal((JSON.parse(statement.content) as {summary:string}).summary.length,600,'超限摘要应截断到600');
  assert.ok(h.kernel.records(r.runId).find(x=>x.kind==='statement')!.content.includes('样本不足'));
  h.advance(r.runId);
  for(let i=0;i<3;i++){h.complete();h.advance(r.runId);}
@@ -386,7 +449,7 @@ test('research v2: 评审逐项判定覆盖/重复/未知ID、引证逐字与弃
  assert.throws(()=>h.complete({...h.v2Juror('pass'),criterionEvaluations:[{criterionId:'s9',status:'satisfied',reason:'x'}]}),/冻结的评审标准/);
  assert.throws(()=>h.complete({...h.v2Juror('pass'),criterionEvaluations:[{criterionId:'s1',status:'satisfied',reason:'x'},{criterionId:'s1',status:'satisfied',reason:'y'}]}),/只能有一条/);
  assert.throws(()=>h.complete({...h.v2Juror('pass'),criterionEvaluations:[{criterionId:'s1',status:'satisfied',reason:'x'}]}),/覆盖全部评审标准/);
- assert.throws(()=>h.complete({...h.v2Juror('pass'),criterionEvaluations:[{criterionId:'s1',status:'satisfied',reason:'x',evidence:[{sourceId:source.id,quote:'假引文'}]},{criterionId:'s2',status:'satisfied',reason:'y'}]}),/逐字匹配/);
+ assert.throws(()=>h.complete({...h.v2Juror('pass'),criterionEvaluations:[{criterionId:'s1',status:'satisfied',reason:'x',evidence:[{sourceId:source.id,quote:'假引文'}]},{criterionId:'s2',status:'satisfied',reason:'y'}]}),/逐字校验/);
  assert.throws(()=>h.complete({...h.v2Juror('abstain'),abstainReason:undefined}),/弃权必须说明原因/);
  assert.doesNotThrow(()=>h.complete({...h.v2Juror('pass'),criterionEvaluations:[{criterionId:'s1',status:'satisfied',reason:'x',evidence:[{sourceId:source.id,quote:'样本只有两组'}]},{criterionId:'s2',status:'satisfied',reason:'y'}]}));
 });

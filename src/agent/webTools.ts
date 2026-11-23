@@ -147,10 +147,23 @@ export function extractHtmlText(html: string): { title: string | null; text: str
 const CJK_CLASS = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uff00-\\uffef';
 const CJK_INLINE_SPACES = new RegExp(`([${CJK_CLASS}])[ \\t]+(?=[${CJK_CLASS}])`, 'g');
 
-/** 引文校验侧的归一化：除空格外额外容忍CJK之间的换行（旧记录含行内折行）与nbsp/全角空格。
- *  只剥空白、不动实质字符——改写、换词、拉丁词间空格仍会被逐字校验拒绝。 */
+/** 列表分隔标点等价类：全半宽逗号/顿号/分号/冒号互为变体。tokenizer复述时惯常替换分隔符
+ *  （2026-11-23实机：资料「，」被复述为「、」致引文误拒）；句内语气不变，不属实质改写。
+ *  终止标点（。！？）与引号不在类内——句界与语气变化仍按逐字失配拒绝。 */
+const SEPARATOR_PUNCT = /[，、,;；：:]/g;
+const CJK_PUNCT_CLASS = '\\u3000-\\u303f\\uff00-\\uffef';
+const SPACE_BEFORE_CJK_PUNCT = new RegExp(`[ \\t\\r\\n\\f\\v\\u00a0\\u3000]+(?=[${CJK_PUNCT_CLASS}])`, 'g');
+const SPACE_AFTER_CJK_PUNCT = new RegExp(`([${CJK_PUNCT_CLASS}])[ \\t\\r\\n\\f\\v\\u00a0\\u3000]+`, 'g');
+const CJK_ADJACENT_SPACES = new RegExp(`([${CJK_CLASS}])[ \\t\\r\\n\\f\\v\\u00a0\\u3000]+(?=[${CJK_CLASS}])`, 'g');
+
+/** 引文校验侧的归一化：①分隔标点归一到全角逗号；②CJK标点邻接空白剥离（抓取清洗折行/nbsp/全角空格）；
+ *  ③CJK汉字邻接空白剥离。改写、换词、拉丁词间空格仍会被逐字校验拒绝。 */
 export function normalizeQuoteText(text: string): string {
-    return text.replace(new RegExp(`([${CJK_CLASS}])[ \\t\\r\\n\\f\\v\\u00a0\\u3000]+(?=[${CJK_CLASS}])`, 'g'), '$1');
+    return text
+        .replace(SEPARATOR_PUNCT, '，')
+        .replace(SPACE_BEFORE_CJK_PUNCT, '')
+        .replace(SPACE_AFTER_CJK_PUNCT, '$1')
+        .replace(CJK_ADJACENT_SPACES, '$1');
 }
 
 function decodeEntities(input: string): string {

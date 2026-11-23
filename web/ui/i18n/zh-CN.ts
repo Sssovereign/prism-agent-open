@@ -544,6 +544,7 @@ export const zhCN: Record<string, string> = {
     'research.tool.webFetch': '网页抓取',
     'research.activity.modelRequests': '模型请求 {count} 次',
     'research.reject.line': '交付被拒 {count} 次 · 最近：{message}',
+    'research.reject.repairProgress': '已尝试修复 {attempt}/{max}',
     'research.report.title': '研究结果',
     'research.report.adoptHeadline': '建议采用：{candidate}',
     'research.report.dispositionHeadline': '当前建议：{kind}',

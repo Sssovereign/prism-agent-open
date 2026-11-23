@@ -18,7 +18,7 @@ export interface ResearchReviewDraft {
  objections:Array<{target:ResearchObjectionTarget;text:string}>;
 }
 const emit=defineEmits<{(e:'retry'):void;(e:'review',draft:ResearchReviewDraft):void;(e:'settings'):void;(e:'continue'):void;(e:'handoff',prefill:ResearchHandoffPrefill):void}>();
-interface Phase {id:string;participantId:string;label:string;role:string;ordinal:number;phaseKey?:string;roundNo?:number;status:string;sealed:boolean;view:ResearchView|null;output:ResearchSubmission|null;model?:{displayName?:string;modelId?:string};activity?:{tools:Record<string,number>;modelRequests:number};rejections?:{count:number;last:{at:string;message:string}|null}}
+interface Phase {id:string;participantId:string;label:string;role:string;ordinal:number;phaseKey?:string;roundNo?:number;status:string;sealed:boolean;view:ResearchView|null;output:ResearchSubmission|null;model?:{displayName?:string;modelId?:string};activity?:{tools:Record<string,number>;modelRequests:number};rejections?:{count:number;last:{at:string;message:string;diagnostic?:{category?:string;path?:string;hint?:string;repairAttempt?:number;maxRepairs?:number}}|null}}
 interface ProtocolInfo {policyVersion:string;verdicts:string[];decision:{required:boolean;proposition:string;candidates:Array<{id:string;text:string}>}|null;subject:{title:string;content:string}|null;criteria:Array<{id:string;text:string;mustHave:boolean}>|null}
 const snapshot=ref<{phases:Phase[];records:ResearchRecord[];report:ResearchReport|null;protocol?:ProtocolInfo;failure?:{message?:string}}|null>(null),error=ref(''),actionBusy=ref(false);
 const flow=ref<HTMLElement>();
@@ -356,7 +356,7 @@ watch(()=>[props.runId,props.status],()=>{void load();});onMounted(load);onBefor
    </small>
   </header>
   <p v-if="activityLine(phase)" class="activity-line">{{activityLine(phase)}}<template v-if="phase.activity?.modelRequests"> · {{t('research.activity.modelRequests',{count:phase.activity.modelRequests})}}</template></p>
-  <p v-if="phase.rejections?.count" class="reject-line">{{t('research.reject.line',{count:phase.rejections.count,message:phase.rejections.last?.message||''})}}</p>
+   <p v-if="phase.rejections?.count" class="reject-line">{{t('research.reject.line',{count:phase.rejections.count,message:phase.rejections.last?.message||''})}}<span v-if="phase.rejections.last?.diagnostic?.path"> · {{phase.rejections.last.diagnostic.path}}</span><span v-if="phase.rejections.last?.diagnostic?.repairAttempt"> · {{t('research.reject.repairProgress',{attempt:phase.rejections.last.diagnostic.repairAttempt,max:phase.rejections.last.diagnostic.maxRepairs||2})}}</span></p>
   <template v-if="!phase.sealed&&phase.output">
    <p v-if="speechSummary(phase.output)" class="speech-summary">{{speechSummary(phase.output)}}</p>
    <details class="tool-card"><summary>{{t('research.speech.full')}}<UiIcon class="tool-chevron" name="chevron-right" :size="14" /></summary>

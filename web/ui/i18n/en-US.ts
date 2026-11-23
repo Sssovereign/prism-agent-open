@@ -543,6 +543,7 @@ export const enUS: Record<string, string> = {
     'research.tool.webFetch': 'Web fetch',
     'research.activity.modelRequests': '{count} model requests',
     'research.reject.line': '{count} delivery rejections · latest: {message}',
+    'research.reject.repairProgress': 'Repair attempt {attempt}/{max}',
     'research.report.title': 'Research result',
     'research.report.adoptHeadline': 'Recommendation: adopt {candidate}',
     'research.report.dispositionHeadline': 'Recommendation: {kind}',

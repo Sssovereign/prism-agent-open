@@ -1,4 +1,4 @@
-import type { ResearchRecord } from '../../contracts/research.js';
+import type { ResearchDeliveryDiagnostic, ResearchRecord } from '../../contracts/research.js';
 
 export const RESEARCH_PROMPT_VERSION = 'research-task-card-v1';
 
@@ -9,8 +9,10 @@ export const RESEARCH_SYSTEM_PROMPT = [
   '最终只返回任务卡要求的一个 JSON 对象。',
 ].join('\n');
 
-export function researchRepairPrompt(error: string): string {
-  return `上次提交未通过校验：${error.slice(0, 400)}\n按当前角色的任务卡修正该问题，保留有依据的内容。没有可核对的引文就留空，不补造事实或编号。返回完整 JSON 对象，不加代码围栏。`;
+export function researchRepairPrompt(error: string | ResearchDeliveryDiagnostic): string {
+  if(typeof error==='string')return `上次提交未通过校验：${error.slice(0,400)}\n按当前角色的任务卡修正该问题，保留有依据的内容。没有可核对的引文就留空，不补造事实或编号。返回完整 JSON 对象，不加代码围栏。`;
+  const details=[`分类：${error.category}`,...(error.path?[`字段：${error.path}`]:[]),`问题：${error.message}`,...(error.expected?[`期望：${error.expected}`]:[]),...(error.actualSummary?[`当前值摘要：${error.actualSummary}`]:[]),...(error.hint?[`修正：${error.hint}`]:[])].join('\n');
+  return `上次交付被拒绝。只修正以下定位到的问题，保留其他有效分析与字段：\n${details.slice(0,700)}\n没有依据时不要补造引文、主张ID、票数或事实。返回完整JSON对象，不加代码围栏。`;
 }
 
 /** Stored originals remain immutable; only the material embedded in a prompt is bounded.

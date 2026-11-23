@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildProductApp } from '../src/app.js';
-import { extractHtmlText, fetchUrlText, clearFetchCache, type WebFetchToolResult } from '../src/agent/webTools.js';
+import { extractHtmlText, fetchUrlText, clearFetchCache, normalizeQuoteText, type WebFetchToolResult } from '../src/agent/webTools.js';
 import { getSearchSettings, setSearchProvider, setSearchCredential, clearSearchCredential, searchWebForUser } from '../src/agent/searchSettings.js';
 import { requiresApproval } from '../src/agent/approvalPolicy.js';
 import { TOOL_SPECS } from '../src/agent/toolExec.js';
@@ -35,6 +35,19 @@ test('webTools: extractHtmlText 剥除中文句内标签折行空格，保留拉
     const { text } = extractHtmlText('<p>盘后披露超2亿元<a>回购</a>或<em>增持计划</em>公告，<a>光模块</a>表现较弱。iPhone 15 and vivo X200 上市。</p>');
     assert.ok(text.includes('盘后披露超2亿元回购或增持计划公告，光模块表现较弱。'));
     assert.ok(text.includes('iPhone 15 and vivo X200 上市。'));
+});
+
+test('webTools: normalizeQuoteText 分隔标点等价（2026-11-23实机：资料"，"被复述为"、"）', () => {
+    const source = '创业板指周下跌3.8%，上证50逆势周上涨0.4%。市场下挫，银行等防御性板块上涨。';
+    const retold = '创业板指周下跌3.8%、上证50逆势周上涨0.4%。市场下挫、银行等防御性板块上涨。';
+    assert.equal(normalizeQuoteText(source).includes(normalizeQuoteText(retold)), true, '顿号↔逗号必须等价');
+    // 半角/全角分号冒号同属分隔等价类
+    assert.equal(normalizeQuoteText('融资余额：22466亿元；降幅25%').includes(normalizeQuoteText('融资余额: 22466亿元; 降幅25%')), true);
+    // 拉丁词间空格与实质换词仍拒绝
+    assert.equal(normalizeQuoteText('iPhone 15 Pro上市').includes(normalizeQuoteText('iPhone 15Pro上市')), false);
+    assert.equal(normalizeQuoteText('银行等防御性板块上涨').includes(normalizeQuoteText('银行等防御板块上涨')), false);
+    // 终止标点不等价：句号↔问号是语气变化
+    assert.equal(normalizeQuoteText('本周会企稳吗。').includes(normalizeQuoteText('本周会企稳吗？')), false);
 });
 
 test('webTools: fetchUrlText 拒绝非https与内网地址', async () => {

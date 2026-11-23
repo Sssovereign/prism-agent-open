@@ -28,7 +28,7 @@ import { RUNTIME_STREAM_PROFILE } from '../src/models/streamNetwork.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const runnerEntry = fileURLToPath(new URL('../src/agent/runnerMain.js', import.meta.url));
 
-interface UpstreamState { memoryFailure?:'selector'|'extraction'|'slow-extraction'; researchInvalidOnce?:boolean; mode: 'tool_then_done' | 'slow' | 'error' | 'history' | 'research' | 'memory'; requests: string[];failure?:{status:number;message:string};subagentMode?:'reply'|'slow'|'loop';subagentAborted?:boolean;usageTokens?:number;customTool?:{name:string;args:Record<string,unknown>};toolQueue?:Array<{name:string;args:Record<string,unknown>}> }
+interface UpstreamState { memoryFailure?:'selector'|'extraction'|'slow-extraction'; researchInvalidOnce?:boolean; researchInvalidAlways?:boolean; mode: 'tool_then_done' | 'slow' | 'error' | 'history' | 'research' | 'memory'; requests: string[];failure?:{status:number;message:string};subagentMode?:'reply'|'slow'|'loop';subagentAborted?:boolean;usageTokens?:number;customTool?:{name:string;args:Record<string,unknown>};toolQueue?:Array<{name:string;args:Record<string,unknown>}> }
 
 function sseData(payload: Record<string, unknown>): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -110,7 +110,7 @@ async function httpsFixture(t: { after(fn: () => unknown): unknown }, state: Ups
           }
           if(v2&&label==='aggregate'){extra.blockingItems=[];extra.nextSteps=['合成下一步'];}
           const output={text:label==='host'?'HOST_SENTINEL：证据与反证需要保留。':`${label}独立分析`,claims:source?[{key:'c1',text:'样本有限',evidence:[{sourceId:source.id,quote:'样本只有两组'}],respondsTo:label==='pro'||label==='con'?claims.slice(-1).map((c:{id:string})=>c.id):[]}]:[],limitations:['需要更多样本'],...(label==='host'?{objections:claims.map((c:{id:string})=>({claimId:c.id,resolution:'unresolved',reason:'样本有限'}))}:{}),...(label.startsWith('juror')&&!v2?{verdict:label==='juror1'?'insufficient':'con'}:{}),...(v2&&(label==='host'||label==='aggregate')?{summary:`${label}摘要`}:{}),...extra};
-          res.write(chunk({role:'assistant',content:JSON.stringify(state.researchInvalidOnce?{...output,claims:[{key:'bad',text:'bad',evidence:[{sourceId:'unknown',quote:'fake'}]}]}:output)},'stop',usage));
+          res.write(chunk({role:'assistant',content:JSON.stringify(state.researchInvalidOnce||state.researchInvalidAlways?{...output,claims:[{key:'bad',text:'bad',evidence:[{sourceId:'unknown',quote:'fake'}]}]}:output)},'stop',usage));
           state.researchInvalidOnce=false;
         }
         res.end('data: [DONE]\n\n');return;
@@ -1023,14 +1023,63 @@ test('research: 新任务卡无效引文收到局部修复提示，保留拒绝�
  const choice={modelConfigId:h.modelConfigId,modelId:'test-model'};
  const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'jury',objective:'格式修复验收',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:[{title:'原文',content:'样本只有两组'}],subject:{title:'测试对象',content:'测试材料'},criteria:[{id:'s1',text:'样本充分',mustHave:true}]});
  assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
- const repair=state.requests.flatMap(request=>(JSON.parse(request).messages as Array<{role:string;content:unknown}>)).find(message=>message.role==='user'&&typeof message.content==='string'&&message.content.startsWith('上次提交未通过校验：'));
+ const repair=state.requests.flatMap(request=>(JSON.parse(request).messages as Array<{role:string;content:unknown}>)).find(message=>message.role==='user'&&typeof message.content==='string'&&message.content.startsWith('上次交付被拒绝'));
  assert.ok(repair,'修复请求应包含新版局部反馈');
- assert.match(String(repair.content),/引文必须逐字匹配/);
+ assert.match(String(repair.content),/引文未通过逐字校验/);
+ assert.match(String(repair.content),/分类：citation/);
  assert.doesNotMatch(String(repair.content),/研究任务卡|研究记录目录/);
  assert.ok(String(repair.content).length<600,'修复消息不重复发送任务卡或资料');
  assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM run_events WHERE run_id=? AND type='research.delivery.rejected'").get(run.runId)!.n,1);
  assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM evidence WHERE run_id=? AND excerpt='fake'").get(run.runId)!.n,0);
  assert.equal(h.db.db.prepare('SELECT COUNT(*) n FROM attempts a JOIN phase_tasks pt ON pt.id=a.phase_task_id WHERE pt.run_id=?').get(run.runId)!.n,4);
+});
+
+test('research: 旧装配run的修复轮保留字符串回退提示',async t=>{
+ const state:UpstreamState={mode:'research',requests:[],researchInvalidOnce:true},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'};
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'jury',objective:'旧装配修复回退',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:[{title:'原文',content:'样本只有两组'}],policyVersion:'research-v1'});
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],60_000),'succeeded');
+ const repair=state.requests.flatMap(request=>(JSON.parse(request).messages as Array<{role:string;content:unknown}>)).find(message=>message.role==='user'&&typeof message.content==='string'&&message.content.startsWith('平台结构校验未通过：'));
+ assert.ok(repair,'旧装配run保留字符串修复回退');
+ assert.match(String(repair.content),/引文未通过逐字校验/);
+});
+
+test('research: 两次修复耗尽以DELIVERY_INVALID终态失败，拒绝台账与修复轮一致，原地重试保留拒绝记录后恢复',async t=>{
+ const state:UpstreamState={mode:'research',requests:[],researchInvalidAlways:true},upstream=await httpsFixture(t,state),h=await buildHarness(t,upstream);
+ const choice={modelConfigId:h.modelConfigId,modelId:'test-model'};
+ const run=h.supervisor.research.create({userId:h.userId,sessionId:h.sessionId,projectId:h.projectId,mode:'jury',objective:'修复耗尽验收',models:{juror1:choice,juror2:choice,juror3:choice,aggregate:choice},sources:[{title:'原文',content:'样本只有两组'}],subject:{title:'测试对象',content:'测试材料'},criteria:[{id:'s1',text:'样本充分',mustHave:true}]});
+ assert.equal(await waitForStatus(h.db,run.runId,['failed'],90_000),'failed');
+ // 唯一终态失败事件：DELIVERY_INVALID 且携带脱敏交付诊断，不进入自动重建
+ const failed=h.db.db.prepare("SELECT payload_json FROM run_events WHERE run_id=? AND type='run.failed'").all(run.runId) as Array<{payload_json:string}>;
+ assert.equal(failed.length,1,'耗尽只产生一个终态失败事件');
+ const failedPayload=JSON.parse(failed[0]!.payload_json) as {error:string;delivery?:{researchDelivery?:{maxRepairs?:number}};retryable?:boolean};
+ assert.equal(failedPayload.error,'DELIVERY_INVALID');
+ assert.equal(failedPayload.delivery?.researchDelivery?.maxRepairs,2);
+ assert.equal(failedPayload.retryable,false);
+ assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM run_events WHERE run_id=? AND type='run.retry_scheduled'").get(run.runId)!.n,0,'交付耗尽属不可自愈类，不排期自动重建');
+ // 拒绝台账=初始提交+两次修复，逐条带分类与修复进度
+ const rejections=h.db.db.prepare("SELECT payload_json FROM run_events WHERE run_id=? AND type='research.delivery.rejected' ORDER BY rowid").all(run.runId) as Array<{payload_json:string}>;
+ assert.equal(rejections.length,3,'初始提交+两次修复各一条拒绝');
+ const parsed=rejections.map(r=>JSON.parse(r.payload_json) as {details?:{researchDelivery?:{category?:string;repairAttempt?:number;maxRepairs?:number}};proposal?:string});
+ assert.deepEqual(parsed.map(p=>p.details?.researchDelivery?.repairAttempt),[1,2,2]);
+ assert.ok(parsed.every(p=>p.details?.researchDelivery?.category==='citation'&&p.details.researchDelivery.maxRepairs===2));
+ assert.ok(parsed.every(p=>typeof p.proposal==='string'&&p.proposal.includes('fake')),'候选输出仅随属主审计事件保留');
+ assert.ok(!parsed.some(p=>JSON.stringify(p.details?.researchDelivery??{}).includes('fake')),'诊断对象不得携带被拒引文原文');
+ assert.equal(h.supervisor.research.report(run.runId),null,'耗尽不发布报告');
+ assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM research_records WHERE run_id=? AND kind='opinion'").get(run.runId)!.n,0,'不发布半成品意见');
+ // 修复轮消费结构化诊断：局部提示带分类，不重复任务卡与资料
+ const repair=state.requests.flatMap(request=>(JSON.parse(request).messages as Array<{role:string;content:unknown}>)).find(message=>message.role==='user'&&typeof message.content==='string'&&message.content.startsWith('上次交付被拒绝'));
+ assert.ok(repair,'修复请求应走结构化诊断路径');
+ assert.match(String(repair.content),/分类：citation/);
+ assert.doesNotMatch(String(repair.content),/研究任务卡|研究记录目录/);
+ // 原地重试：恢复输出后只重跑失败阶段，旧拒绝事件保留，报告正常生成
+ state.researchInvalidAlways=false;
+ const attempt=h.db.db.prepare('SELECT active_attempt_id FROM phase_tasks WHERE run_id=? AND phase_key=?').get(run.runId,'opinion_1')!;
+ await h.supervisor.retryFailedRun(run.runId,h.userId,h.sessionId,String(attempt.active_attempt_id));
+ assert.equal(await waitForStatus(h.db,run.runId,['succeeded','failed'],90_000),'succeeded');
+ assert.equal(h.db.db.prepare('SELECT COUNT(*) n FROM attempts a JOIN phase_tasks pt ON pt.id=a.phase_task_id WHERE pt.run_id=?').get(run.runId)!.n,5,'重试只新增失败阶段与后续阶段attempt');
+ assert.ok(h.supervisor.research.report(run.runId));
+ assert.equal(h.db.db.prepare("SELECT COUNT(*) n FROM run_events WHERE run_id=? AND type='research.delivery.rejected'").get(run.runId)!.n,3,'重试成功后旧拒绝记录保留');
 });
 
 

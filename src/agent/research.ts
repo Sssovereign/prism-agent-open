@@ -5,7 +5,7 @@ import { statSync, openSync, readSync, closeSync } from 'node:fs';
 import type { Db } from '../storage/db.js';
 import { normalizeAgentSettings, type FrozenModelParameters, type AgentRuntimeSettings } from '../../contracts/models.js';
 import { ApiError } from '../../contracts/errors.js';
-import { RESEARCH_VERDICTS, CRITERION_STATUSES, DISPOSITION_KINDS, type ResearchMode, type ResearchRole, type ResearchSourceInput, type ResearchSourceFileInput, type ResearchModelChoice, type ResearchView, type ResearchRecord, type ResearchSubmission, type ResearchReport, type ResearchDecisionConfig, type ResearchSubject, type ResearchCriterion, type ResearchCriterionInput, type ResearchDisposition, type CriterionStatus, type ResearchObjectionTarget, type ResearchObjectionResponse, type ResearchCapabilitySnapshot, type ResearchMcpManifestEntry, type ResearchPrivateSnapshot } from '../../contracts/research.js';
+import { RESEARCH_VERDICTS, CRITERION_STATUSES, DISPOSITION_KINDS, type ResearchMode, type ResearchRole, type ResearchSourceInput, type ResearchSourceFileInput, type ResearchModelChoice, type ResearchView, type ResearchRecord, type ResearchSubmission, type ResearchReport, type ResearchDecisionConfig, type ResearchSubject, type ResearchCriterion, type ResearchCriterionInput, type ResearchDisposition, type CriterionStatus, type ResearchObjectionTarget, type ResearchObjectionResponse, type ResearchCapabilitySnapshot, type ResearchMcpManifestEntry, type ResearchPrivateSnapshot, type ResearchDeliveryDiagnostic, type ResearchDeliveryCategory } from '../../contracts/research.js';
 import { fetchUrlText, normalizeQuoteText } from './webTools.js';
 import { searchWebForUser, webSearchAvailableForBinding } from './searchSettings.js';
 import { RESEARCH_PROMPT_VERSION, researchContextChars, researchPromptRecords, researchRecordPage } from './researchContext.js';
@@ -225,7 +225,58 @@ function chunkMaterialText(text: string, limit: number): string[] {
   }
   return chunks;
 }
-const invalid = (message: string): never => { throw new ApiError('DELIVERY_INVALID', message); };
+export const RESEARCH_DELIVERY_REPAIRS_MAX = 2;
+function deliveryDiagnostic(message: string, path?: string): ResearchDeliveryDiagnostic {
+  const lower=message.toLowerCase();
+  let category:ResearchDeliveryCategory='field_shape',hint='按字段规则修正当前JSON，保留其他有效内容。',expected:string|undefined;
+  if(/json对象|合法json/.test(message)){category='json';path=path??'$';hint='返回一个完整、闭合的JSON对象。';}
+  else if(/引文|资料.*原文|sourceid/.test(lower)){category='citation';path=path??'claims[].evidence[]';hint='核对当前视野中的已保存原文；没有可逐字核对的证据时移除该引文，不要编造。'}
+  else if(/主张|回应|完整id|claimid/.test(message)){category='identifier';path=path??'claims[].respondsTo';hint='只使用当前视野提供的完整主张ID；无法确认时移除该回应。'}
+  else if(/异议/.test(message)){category='objection';path=path??'objectionResponses';hint='逐条回应当前任务卡列出的异议ID，不要补造ID。'}
+  else if(/票型|投票分类|verdict|弃权/.test(lower)){category='verdict';path=path??'verdict';hint='使用允许的票型字面量，并确保与逐项判定一致。'}
+  else if(/标准|逐项判定|criterion/.test(lower)){category='criterion';path=path??'criterionEvaluations';hint='按冻结标准ID逐项给出一条判定，不增删标准。'}
+  else if(/处置|候选|决定性依据/.test(message)){category='disposition';path=path??'disposition';hint='按处置类型补齐必需字段，并只引用已发布主张。'}
+  else if(/阻断项|下一步|多数判定/.test(message)){category='blocking_item';path=path??'blockingItems';hint='使阻断项与陪审判定一致，并给出可执行的下一步。'}
+  else if(/缺失|必须|须为非空|不能为空/.test(message)){category='required_field';hint='补齐指出的必填字段；无依据内容不得臆造。'}
+  else if(/超过|最多|上限|字符|条（当前/.test(message)){category='field_limit';hint='将指出的字段精简到限制内，不要删除与该字段无关的有效内容。'}
+  if(message.includes('pass|conditional_pass|fail|insufficient|abstain'))expected='pass|conditional_pass|fail|insufficient|abstain';
+  return {category,...(path?{path}:{}),message:message.slice(0,400),...(expected?{expected}:{}),hint,repairable:true};
+}
+const invalid = (message: string, path?:string): never => { throw new ApiError('DELIVERY_INVALID', message, {researchDelivery:deliveryDiagnostic(message,path)}); };
+
+interface CitationVerdict { ok: boolean; remapTo?: string; reason?: string }
+/** 引文逐字校验+归属自愈判定：
+ *  ①quote须在sourceId指向的视野内资料中逐字存在（容忍分隔标点/CJK邻接空白归一——2026-11-22/23实机：
+ *  抓取折行空格、「，」被复述为「、」；实质换词仍拒绝）；
+ *  ②引文真实但sourceId标错（2026-11-23反方round2三连拒根因：同句挂到另一份资料，通用拒绝文案
+ *  无定位信息致修复轮三次复犯）时，按视野内唯一逐字命中资料修正归属——句子真实存在，反编造性质不变；
+ *  ③零/多命中返回定位文案，经researchRepairPrompt流入修复轮。 */
+function checkCitation(records:ResearchRecord[],citation:unknown):CitationVerdict {
+  const quote=(citation as {quote?:unknown}|null)?.quote;
+  if(typeof quote!=='string'||!quote.trim()||quote.length>4000)return {ok:false,reason:'引文为空或超过4000字符'};
+  const inSource=(r:ResearchRecord)=>r.content.includes(quote)||normalizeQuoteText(r.content).includes(normalizeQuoteText(quote));
+  const source=records.find(r=>r.kind==='source'&&r.id===(citation as {sourceId?:unknown}).sourceId);
+  if(source&&inSource(source))return {ok:true};
+  const hits=records.filter(r=>r.kind==='source'&&inSource(r));
+  if(hits.length===1)return {ok:false,remapTo:hits[0]!.id};
+  if(hits.length>1)return {ok:false,reason:'该引文在多份资料中逐字出现，无法确定唯一出处'};
+  return {ok:false,reason:source?`所引资料「${source.title.slice(0,24)}」中没有这段原文，视野内其他资料也没有`:'引文的sourceId不在当前视野资料清单中'};
+}
+
+/** 短id自愈：主张全id为“<phaseTaskId>:<key>”形，模型惯写短key漏前缀（2026-11-23实机同源的反馈不可执行问题）。
+ *  逐id解析：全id直接收；其余按“:id”尾段在全id集中唯一命中即补全；任一id零/多命中或非法返回null由调用方拒绝。 */
+function resolveClaimIds(knownClaims:Set<string>,ids:unknown):string[]|null {
+  if(!Array.isArray(ids))return null;
+  const resolved:string[]=[];
+  for(const id of ids) {
+    if(typeof id!=='string'||!id)return null;
+    if(knownClaims.has(id)) { resolved.push(id); continue; }
+    const hits=[...knownClaims].filter(k=>k.endsWith(`:${id}`));
+    if(hits.length!==1)return null;
+    resolved.push(hits[0]!);
+  }
+  return resolved;
+}
 
 /** 字符串感知的首个平衡JSON对象提取：取第一个完整闭合的顶层对象。
  *  针对模型把完整JSON对象重复输出两遍/尾随说明文字的编写错误（2026-11-22实机1例）；截断的JSON无闭合返回null。 */
@@ -288,7 +339,7 @@ function normalizeObjectionTarget(raw: unknown): ResearchObjectionTarget {
   const target = raw as { type?: unknown; claimId?: unknown };
   if (target.type === 'conclusion') return { type: 'conclusion' };
   if (target.type === 'claim') {
-    if (typeof target.claimId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}:[a-zA-Z0-9_-]{1,40}$/.test(target.claimId)) throw new ApiError('VALIDATION_FAILED', '异议目标主张ID无效');
+    if (typeof target.claimId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}:[a-zA-Z0-9_-]{1,80}$/.test(target.claimId)) throw new ApiError('VALIDATION_FAILED', '异议目标主张ID无效');
     return { type: 'claim', claimId: target.claimId };
   }
   throw new ApiError('VALIDATION_FAILED', '异议目标须为具体主张或整份结论');
@@ -819,30 +870,57 @@ export class ResearchCoordinator {
   private parse(raw:string,phase:Phase,records:ResearchRecord[],protocol:ResearchProtocolConfig):ResearchSubmission {
     const value = parseResearchJson(raw);
     if(!value)return invalid('研究输出必须是JSON对象');
-    if(typeof value.text!=='string'||!value.text.trim()||value.text.length>40_000||!Array.isArray(value.claims)||value.claims.length>16||!Array.isArray(value.limitations)||value.limitations.length>20||value.limitations.some(s=>typeof s!=='string'||s.length>2000))return invalid('研究输出字段缺失或超长');
-    // 摘要：v1保持可选；v2主持与汇总必填。超限或缺文本直接拒绝，走既有修复流程。
-    if(value.summary!==undefined&&(typeof value.summary!=='string'||!value.summary.trim()||value.summary.length>RESEARCH_SUMMARY_MAX))return invalid(`摘要须为不超过${RESEARCH_SUMMARY_MAX}字符的非空文本`);
+    // 字段级拒绝文案（2026-11-24）：四种超长共用一句打包文案时修复轮无从定位，拆开点名字段与现值。
+    if(typeof value.text!=='string'||!value.text.trim())return invalid('正文text缺失或为空');
+    if(value.text.length>40_000)return invalid(`正文text超过40000字符（当前${value.text.length}），请精简后重新提交`);
+    if(!Array.isArray(value.claims))return invalid('claims须为主张数组');
+    if(value.claims.length>16)return invalid(`claims超过16条（当前${value.claims.length}条），请归并相近主张`);
+    if(!Array.isArray(value.limitations))return invalid('limitations须为文本数组');
+    if(value.limitations.length>20)return invalid(`limitations超过20条（当前${value.limitations.length}条）`);
+    if(value.limitations.some(s=>typeof s!=='string'||s.length>2000))return invalid('limitations每条须为不超过2000字符的文本');
+    // 摘要：v1保持可选；v2主持与汇总必填。超限截断自愈（2026-11-24决策）——摘要是自产摘要文本，
+    // 截断不损事实；超长曾硬拒，话痨模型白烧一轮修复额度。
+    if(value.summary!==undefined) {
+      if(typeof value.summary!=='string'||!value.summary.trim())return invalid('摘要须为非空文本');
+      if(value.summary.length>RESEARCH_SUMMARY_MAX)value.summary=value.summary.slice(0,RESEARCH_SUMMARY_MAX);
+    }
     if(protocol.summaryRequired&&['host','aggregate'].includes(phase.role)&&(!value.summary||!value.summary.trim()))return invalid('v2协议下主持与汇总必须提供非空摘要');
     const keys=new Set<string>();
     const knownClaims=new Set(records.filter(r=>['statement','host','opinion','verdict'].includes(r.kind)).flatMap(r=>{try{return (JSON.parse(r.content) as {claims:Array<{id:string}>}).claims.map(c=>c.id);}catch{return [];}}));
     for(const claim of value.claims) {
-      if(!claim||typeof claim.key!=='string'||!/^[a-zA-Z0-9_-]{1,40}$/.test(claim.key)||keys.has(claim.key)||typeof claim.text!=='string'||!claim.text.trim()||claim.text.length>4000||!Array.isArray(claim.evidence)||claim.evidence.length>12)return invalid('主张编号、正文或引证无效');
+      // key上限80：模型惯用长kebab描述键（2026-11-23实机44字符被40上限硬拒）；respondsTo/异议claimId同界。
+      if(!claim||typeof claim.key!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(claim.key))return invalid(`主张key无效：须为1–80位字母/数字/_/-（收到：${JSON.stringify(String((claim as {key?:unknown})?.key??'')).slice(0,60)}）`);
+      if(keys.has(claim.key))return invalid(`主张key重复：${claim.key}`);
+      if(typeof claim.text!=='string'||!claim.text.trim()||claim.text.length>4000)return invalid(`主张${claim.key}的正文缺失或超过4000字符`);
+      if(!Array.isArray(claim.evidence))return invalid(`主张${claim.key}的evidence须为引证数组`);
+      if(claim.evidence.length>12)return invalid(`主张${claim.key}的证据超过12条（当前${claim.evidence.length}），请保留最关键的`);
       keys.add(claim.key);
-      if(claim.respondsTo!==undefined&&(!Array.isArray(claim.respondsTo)||claim.respondsTo.length>32||new Set(claim.respondsTo).size!==claim.respondsTo.length||claim.respondsTo.some(id=>!knownClaims.has(id))))return invalid('回应只能引用当前视图内的已发布主张，且不能重复');
+      if(claim.respondsTo!==undefined) {
+        // 短id自愈：模型惯写短key漏“<阶段ID>:”前缀（与错挂引文同源——反馈不可执行则修复轮复犯）；
+        // 全id集中按“:key”尾段唯一命中即补全，零/多命中拒绝并列出可用id。
+        const resolved=resolveClaimIds(knownClaims,claim.respondsTo);
+        if(!resolved||resolved.length>32||new Set(resolved).size!==resolved.length)return invalid(`回应只能引用当前视图内的已发布主张且不能重复；主张完整ID形如“<阶段ID>:<key>”，当前可用：${[...knownClaims].slice(0,6).join('、')||'（视野内暂无已发布主张）'}`);
+        claim.respondsTo=resolved;
+      }
       for(const citation of claim.evidence) {
-        const source=records.find(r=>r.id===citation?.sourceId && r.kind==='source');
-        // 逐字匹配容忍CJK邻接空白差异：抓取清洗在中文句内留下标签折行空格、模型tokenizer复述时归一化，只剥空白不放宽实质校验。
-        const quoteOk=typeof citation.quote==='string'&&citation.quote.trim()&&citation.quote.length<=4000&&(!!source&&(source.content.includes(citation.quote)||normalizeQuoteText(source.content).includes(normalizeQuoteText(citation.quote))));
-        if(!source || !quoteOk)return invalid('引文必须逐字匹配当前视图内已保存资料');
+        const verdict=checkCitation(records,citation);
+        if(verdict.ok)continue;
+        // 归属自愈：引文逐字真实但sourceId标错时按唯一命中资料修正（句子真实存在，反编造性质不变）。
+        if(verdict.remapTo){citation.sourceId=verdict.remapTo;continue;}
+        return invalid(`主张${claim.key}的引文未通过逐字校验：${verdict.reason}。请核对该句实际出自哪份资料，或改写为所引资料中的原文`);
       }
     }
     const v2=protocol.policyVersion!==RESEARCH_POLICY;
-    if(phase.role==='juror'&&!protocol.verdicts.includes(value.verdict as string))return invalid(v2?'陪审初判必须使用规定的票型（通过/有条件通过/不通过/证据不足/弃权）':'陪审初判必须使用规定的投票分类');
+    // 票型文案必须与校验枚举同形（2026-11-24）：旧v2文案写中文票名而枚举是英文字面量——照文案写“通过”仍被拒。
+    if(phase.role==='juror'&&!protocol.verdicts.includes(value.verdict as string))return invalid(v2?`陪审初判必须使用规定的票型字面量：${protocol.verdicts.join('|')}（不可写中文票名）`:'陪审初判必须使用规定的投票分类');
     if(phase.role==='host') {
       if(!Array.isArray(value.objections)||value.objections.length>128)return invalid('主持须逐项处理已有主张');
       const seen=new Set<string>();
+      const availableIds=[...knownClaims].slice(0,6).join('、')||'（视野内暂无已发布主张）';
       for(const objection of value.objections) {
-        if(!objection||!knownClaims.has(objection.claimId)||seen.has(objection.claimId)||!['accepted','rejected','partial','unresolved'].includes(objection.resolution)||typeof objection.reason!=='string'||!objection.reason.trim()||objection.reason.length>2000)return invalid('主持的主张处理记录无效');
+        const resolved=objection?resolveClaimIds(knownClaims,[objection.claimId]):null;
+        if(resolved)objection.claimId=resolved[0]!;
+        if(!objection||!knownClaims.has(objection.claimId)||seen.has(objection.claimId)||!['accepted','rejected','partial','unresolved'].includes(objection.resolution)||typeof objection.reason!=='string'||!objection.reason.trim()||objection.reason.length>2000)return invalid(`主持的主张处理记录无效：claimId须为视野内主张完整ID（形如“<阶段ID>:<key>”，不可重复），resolution须为accepted|rejected|partial|unresolved；当前可用主张：${availableIds}`);
         seen.add(objection.claimId);
       }
       if([...knownClaims].some(id=>!seen.has(id)))return invalid('主持遗漏了已有主张的处理理由');
@@ -870,13 +948,14 @@ export class ResearchCoordinator {
       if(!evaluation||typeof evaluation.criterionId!=='string'||!criteria.some(c=>c.id===evaluation.criterionId))return invalid('逐项判定只能引用冻结的评审标准');
       if(seen.has(evaluation.criterionId))return invalid('同一标准只能有一条逐项判定');
       seen.add(evaluation.criterionId);
-      if(!CRITERION_STATUSES.includes(evaluation.status as never)||typeof evaluation.reason!=='string'||!evaluation.reason.trim()||evaluation.reason.length>2000)return invalid('逐项判定状态或理由无效');
+      if(!CRITERION_STATUSES.includes(evaluation.status as never)||typeof evaluation.reason!=='string'||!evaluation.reason.trim()||evaluation.reason.length>2000)return invalid('逐项判定status须为satisfied|unmet|insufficient，且理由必填（不超过2000字符）');
       if(evaluation.evidence!==undefined) {
         if(!Array.isArray(evaluation.evidence)||evaluation.evidence.length>4)return invalid('逐项引证最多4条');
         for(const citation of evaluation.evidence) {
-          const source=records.find(r=>r.id===citation?.sourceId&&r.kind==='source');
-          const quoteOk=typeof citation.quote==='string'&&citation.quote.trim()&&citation.quote.length<=4000&&(!!source&&(source.content.includes(citation.quote)||normalizeQuoteText(source.content).includes(normalizeQuoteText(citation.quote))));
-          if(!source||!quoteOk)return invalid('引文必须逐字匹配当前视图内已保存资料');
+          const verdict=checkCitation(records,citation);
+          if(verdict.ok)continue;
+          if(verdict.remapTo){citation.sourceId=verdict.remapTo;continue;}
+          return invalid(`标准${evaluation.criterionId}的引文未通过逐字校验：${verdict.reason}。请核对该句实际出自哪份资料，或改写为所引资料中的原文`);
         }
       }
     }
@@ -924,8 +1003,9 @@ export class ResearchCoordinator {
     }
     // 决定性依据必填（B2修复）：决策模式的处置必须引用至少一条已发布主张作为依据，缺失或空数组均拒绝——
     // 否则报告可交付“采用/试验/暂缓”却没有任何可追溯的决定性依据（协议 docs/research-protocol.md 决策协议节）。
-    if(!Array.isArray(disposition.basisClaimIds)||!disposition.basisClaimIds.length||disposition.basisClaimIds.length>16||disposition.basisClaimIds.some(id=>!knownClaims.has(id)))return invalid('决定性依据必须引用当前视图内的已发布主张（至少1条）');
-    result.basisClaimIds=[...disposition.basisClaimIds];
+    const basis=resolveClaimIds(knownClaims,disposition.basisClaimIds);
+    if(!basis||!basis.length||basis.length>16)return invalid(`决定性依据必须引用当前视图内的已发布主张（至少1条，完整ID形如“<阶段ID>:<key>”），当前可用：${[...knownClaims].slice(0,6).join('、')||'（视野内暂无已发布主张）'}`);
+    result.basisClaimIds=basis;
     return result;
   }
   /** v2汇总：阻断项须对应标准并写明理由；下一步建议为有限文本列表。
@@ -982,7 +1062,7 @@ export class ResearchCoordinator {
     const responses=Array.isArray(value.objectionResponses)?value.objectionResponses:[];
     const seen=new Set<string>();
     for(const response of responses) {
-      if(!response||typeof response.objectionId!=='string'||!visible.has(response.objectionId))return invalid('异议回应只能引用当前视图内的异议记录');
+      if(!response||typeof response.objectionId!=='string'||!visible.has(response.objectionId))return invalid('异议回应只能引用当前视野内的用户异议记录（objectionId须为异议记录完整ID，见任务卡清单）');
       if(seen.has(response.objectionId))return invalid('同一异议只能回应一次');
       seen.add(response.objectionId);
       if(!['accepted','rejected','partial','unresolved'].includes(response.resolution)||typeof response.reason!=='string'||!response.reason.trim()||response.reason.length>OBJECTION_RESPONSES_MAX)return invalid('异议回应结论或理由无效');
@@ -1119,7 +1199,11 @@ export class ResearchCoordinator {
     return row?.report_json?JSON.parse(row.report_json) as ResearchReport:null;
   }
   inspect(runId:string):unknown {
-    const rejections=(this.db.db.prepare("SELECT attempt_id AS attemptId,occurred_at AS at,payload_json FROM run_events WHERE run_id=? AND type='research.delivery.rejected' ORDER BY seq").all(runId) as Array<{attemptId:string;at:string;payload_json:string}>).map(r=>({attemptId:r.attemptId,at:r.at,payload:JSON.parse(String(r.payload_json))}));
+    const rejections=(this.db.db.prepare("SELECT attempt_id AS attemptId,occurred_at AS at,payload_json FROM run_events WHERE run_id=? AND type='research.delivery.rejected' ORDER BY seq").all(runId) as Array<{attemptId:string;at:string;payload_json:string}>).map(r=>{
+      const payload=JSON.parse(String(r.payload_json)) as {message?:string;details?:Record<string,unknown>;[key:string]:unknown};
+      const diagnostic=payload.details?.researchDelivery;
+      return {attemptId:r.attemptId,at:r.at,payload:{...payload,...(diagnostic?{diagnostic}:{})}};
+    });
     const failed=this.db.db.prepare("SELECT payload_json FROM run_events WHERE run_id=? AND type='run.failed' ORDER BY seq DESC LIMIT 1").get(runId) as {payload_json:string}|undefined;
     // 工具活动按阶段聚合：attempt→phase_task_id 归组，界面只显示次数；完整工具清单仍在视图与导出中。
     const activity=new Map<string,Record<string,number>>();
@@ -1130,11 +1214,11 @@ export class ResearchCoordinator {
     for(const row of this.db.db.prepare('SELECT pt.id AS pid,COUNT(*) AS n FROM model_requests mr JOIN attempts a ON a.id=mr.attempt_id JOIN phase_tasks pt ON pt.id=a.phase_task_id WHERE mr.run_id=? GROUP BY pt.id').all(runId) as Array<{pid:string;n:number}>) modelRequests.set(row.pid,row.n);
     const attemptPhase=new Map<string,string>();
     for(const row of this.db.db.prepare('SELECT id,phase_task_id FROM attempts WHERE phase_task_id IN (SELECT id FROM phase_tasks WHERE run_id=?)').all(runId) as Array<{id:string;phase_task_id:string}>) attemptPhase.set(row.id,row.phase_task_id);
-    const rejectionsByPhase=new Map<string,Array<{at:string;message:string}>>();
+    const rejectionsByPhase=new Map<string,Array<{at:string;message:string;diagnostic?:unknown}>>();
     for(const rejection of rejections){
       const pid=rejection.attemptId?attemptPhase.get(rejection.attemptId):undefined;
       if(!pid)continue;
-      const list=rejectionsByPhase.get(pid)??[];list.push({at:rejection.at,message:String(rejection.payload?.message??'')});rejectionsByPhase.set(pid,list);
+      const list=rejectionsByPhase.get(pid)??[];list.push({at:rejection.at,message:String(rejection.payload?.message??''),...(rejection.payload?.diagnostic?{diagnostic:rejection.payload.diagnostic}: {})});rejectionsByPhase.set(pid,list);
     }
     const verdicts=this.protocol(runId).verdicts;
     return {report:this.report(runId),failure:failed?JSON.parse(failed.payload_json):null,rejections,

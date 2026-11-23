@@ -53,14 +53,21 @@ for (const doc of KEEP_DOCS) {
   strippedLinks += 1;
 }
 
-// —— 4. 私密扫描：/Users/ 个人路径（白名单=R94 实证两处）与 PEM 私钥块 ——
-const PATH_WHITELIST = new Set(['tests/platform-execution.test.ts', 'web/vendor/dsh/provenance.json']);
+// —— 4. 私密扫描：/Users/ 个人路径与 PEM 私钥块（白名单=防泄漏代码自身的模式字面量，逐条实证） ——
+const PATH_WHITELIST = new Set([
+  'tests/platform-execution.test.ts',        // 合成测试值 /Users/example
+  'web/vendor/dsh/provenance.json',          // R94：历史追溯路径，仅文档性质
+  'scripts/installer/build-desktop.mjs',     // provenance 脱敏逻辑的 /Users/ 字面量
+  'src/agent/memoryLifecycle.ts',            // 记忆私钥清洗正则
+  'scripts/release/sync-open-source.mjs',    // 本脚本自身的匹配模式
+]);
 const offenders = [];
 for (const rel of keptFiles) {
   if (!/\.(ts|cjs|mjs|js|vue|md|json|sql|css|html|yml|yaml|command|sh|ps1)$/.test(rel)) continue;
+  if (PATH_WHITELIST.has(rel)) continue;
   const lines = readFileSync(join(snap, rel), 'utf8').split('\n');
   lines.forEach((line, i) => {
-    if (line.includes('/Users/') && !PATH_WHITELIST.has(rel)) offenders.push(`个人路径 ${rel}:${i + 1}`);
+    if (line.includes('/Users/')) offenders.push(`个人路径 ${rel}:${i + 1}`);
     if (/PRIVATE KEY-----/.test(line)) offenders.push(`PEM私钥 ${rel}:${i + 1}`);
   });
 }

@@ -22,6 +22,13 @@ export const EXEC_CHANNEL_METHODS = new Set([
     'execute_command', 'compact_session', 'steer', 'abort_session', 'shutdown', 'run_subagent',
 ]);
 
+export interface FrameError {
+    code: string;
+    message: string;
+    /** 结构化且已脱敏的错误上下文；旧帧可省略。 */
+    details?: Record<string, unknown>;
+}
+
 export interface Frame {
     v: number;
     channel: 'agent' | 'exec';
@@ -30,7 +37,7 @@ export interface Frame {
     /** runner产生的事件序号（emit_event去重） */
     producerSeq?: number;
     ok?: boolean;
-    error?: { code: string; message: string };
+    error?: FrameError;
     payload?: unknown;
 }
 
@@ -88,7 +95,7 @@ export class ChannelEndpoint {
     constructor(
         private readonly channel: Frame['channel'],
         private readonly write: (data: string) => void,
-        private readonly onFrame: (frame: Frame, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void) => void,
+        private readonly onFrame: (frame: Frame, respond: (ok: boolean, payload?: unknown, error?: FrameError) => void) => void,
         private readonly onProducerEvent?: (seq: number, frame: Frame) => void,
         private readonly onClosed?: () => void,
     ) {}
@@ -119,7 +126,7 @@ export class ChannelEndpoint {
                         this.pending.delete(frame.requestId);
                         clearTimeout(pending.timer);
                         if (frame.ok) pending.resolve(frame);
-                        else pending.reject(new ApiError((frame.error?.code as never) ?? 'INTERNAL_ERROR', frame.error?.message ?? '对端拒绝'));
+                        else pending.reject(new ApiError((frame.error?.code as never) ?? 'INTERNAL_ERROR', frame.error?.message ?? '对端拒绝', frame.error?.details));
                     }
                     continue;
                 }

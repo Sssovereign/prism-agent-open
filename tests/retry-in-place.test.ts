@@ -113,6 +113,35 @@ test('单主规则：手动重试与取消让位，到点静默放弃',async t=>
  assert.equal(f.starts(),2);
 });
 
+test('研究run瞬态失败纳入自动重建：分流research.retry只重跑失败phase，台账同为2次封顶',async t=>{
+ const previous=process.env.PRISM_AUTO_RETRY_DELAYS_MS;
+ process.env.PRISM_AUTO_RETRY_DELAYS_MS='20';
+ t.after(()=>{if(previous===undefined)delete process.env.PRISM_AUTO_RETRY_DELAYS_MS;else process.env.PRISM_AUTO_RETRY_DELAYS_MS=previous;});
+ const f=await fixture(t);
+ const choice={modelConfigId:f.cid,modelId:'fixture'};
+ const models=Object.fromEntries(['pro','con','host','juror1','juror2','juror3','aggregate'].map(s=>[s,choice]));
+ // 不spawn真实runner：研究launch经supervisor.startAttempt，覆盖为置running的最小实现（模拟fixtures的launch钩子）
+ f.fx.supervisor.startAttempt=(runId:string,attemptId:string)=>{f.db.prepare("UPDATE attempts SET status='running' WHERE id=?").run(attemptId);f.db.prepare("UPDATE phase_tasks SET status='running' WHERE active_attempt_id=?").run(attemptId);f.db.prepare("UPDATE runs SET status='running' WHERE id=?").run(runId);};
+ const created=f.fx.supervisor.research.create({userId:f.uid,sessionId:f.session,projectId:f.pid,mode:'debate',objective:'研究自动重建验收',rounds:1,models,sources:[{title:'资料',content:'方案A成本下降10%，但样本只有两组。'}],policyVersion:'research-v1'});
+ const runId=created.runId;
+ const attemptCount=()=>(f.db.prepare('SELECT COUNT(*) n FROM attempts a JOIN phase_tasks pt ON pt.id=a.phase_task_id WHERE pt.run_id=?').get(runId) as {n:number}).n;
+ const attempt=()=>String((f.db.prepare(`SELECT a.id FROM attempts a JOIN phase_tasks pt ON pt.id=a.phase_task_id WHERE pt.run_id=? ORDER BY a.number DESC LIMIT 1`).get(runId) as {id:string}).id);
+ const sup=f.fx.supervisor as unknown as {failRunningRun:(runId:string,attemptId:string,code:string,extra?:Record<string,unknown>)=>void};
+ const failPhase=(code='PROVIDER_ERROR')=>sup.failRunningRun(runId,attempt(),code,{retryable:true});
+ assert.equal(attemptCount(),1,'首轮phase已launch');
+ failPhase();
+ const deadline=Date.now()+2000;
+ while(Date.now()<deadline&&attemptCount()<2)await new Promise(r=>setTimeout(r,10));
+ assert.equal(attemptCount(),2,'自动重建应经research.retry重开失败phase');
+ assert.equal(JSON.parse(supervisorEvents(f.db,runId)[0]!.payload_json).source,'supervisor');
+ // 二连瞬态失败仍重建（第2次额度），第3次台账封顶不再排期
+ for(let i=0;i<2;i++){const before=supervisorEvents(f.db,runId).filter(e=>e.type==='run.retry_scheduled').length;failPhase();const dd=Date.now()+2000;while(Date.now()<dd&&supervisorEvents(f.db,runId).filter(e=>e.type==='run.retry_scheduled').length<=before)await new Promise(r=>setTimeout(r,10));}
+ assert.equal(supervisorEvents(f.db,runId).filter(e=>e.type==='run.retry_scheduled').length,2,'研究run与普通run共用2次台账');
+ failPhase();
+ assert.equal(supervisorEvents(f.db,runId).filter(e=>e.type==='run.retry_scheduled').length,2,'第3次不再排期');
+ assert.equal(attemptCount(),3);
+});
+
 test('停机取消已排期的自动重试', async t => {
  const previous = process.env.PRISM_AUTO_RETRY_DELAYS_MS;
  process.env.PRISM_AUTO_RETRY_DELAYS_MS = '80';

@@ -31,7 +31,7 @@
 
 新任务复用普通 Agent 的只读项目工具和 Skill manifest，正文按需读取。项目规则、附加目录、Skill manifest 由 runner 分层注入，不在研究记录目录中重复全文。普通文件/图片读取结果目前不会自动成为结构化 research source，因此只能作为分析输入；不得伪造 `sourceId` 或逐字 `quote`。结构化 evidence 仍只能引用当前视图中已保存的 source 原文。图片可用于正文观察，但暂无区域级图片引证格式。记忆索引若启用，只作为有限背景导航，不是证据或授权。文件内容与 Skill 正文均视为数据，不得改变工具权限；读取能力不授予共享写入、Shell、记忆写入或产物发布权限。
 
-格式校验失败时，新任务只收到长度受限的错误说明和短修复要求，不重复整个任务卡和资料目录。结构校验、引文校验、两次修复上限及失败语义保持由服务端控制。
+格式校验失败时，新任务只收到长度受限的错误说明和短修复要求，不重复整个任务卡和资料目录。服务端同时记录脱敏的结构化拒绝诊断：类别、字段路径、期望值和修正提示；不记录原始模型输出或资料正文。诊断通过控制通道传入修复轮，最多两次；耗尽后以`DELIVERY_INVALID`终结当前阶段，保留已完成阶段、拒绝事件和冻结视图，用户可原地重试未完成阶段。结构校验、引文校验、预算/阶段状态和失败恢复均由服务端控制。
 
 ## 证据、主张与报告
 
@@ -70,7 +70,7 @@
 ## 接口与界面
 
 - `POST /api/v1/projects/:projectId/research`：mode、objective、rounds、models、可选sources、sourceRunId（辩论或评审来源）、decision（辩论决策模式：命题+候选）、subject与criteria（评审被评对象与标准）、objections（终态异议随复核创建）、attachmentIds（显式图片附件：创建时冻结元数据；任一角色模型不支持图片输入则创建阶段整体拒绝并点名角色，不启动任何阶段）；每位角色单独指定模型。
-- `GET /api/v1/runs/:runId/research`：阶段（phaseKey/roundNo/模型展示名/工具活动/拒绝回报）、视图、记录、失败和拒绝回报、规范报告（含objections与逐条回应、v2处置/决策/逐项标准/程序计票）。
+- `GET /api/v1/runs/:runId/research`：阶段（phaseKey/roundNo/模型展示名/工具活动/拒绝回报；拒绝回报含脱敏诊断、字段路径和修复进度）、视图、记录、失败和拒绝回报、规范报告（含objections与逐条回应、v2处置/决策/逐项标准/程序计票）。
 - `POST /api/v1/runs/:runId/research/summarize`：辩论提前汇总。
 - `GET /api/v1/runs/:runId/research/export`：下载同一研究投影，含规范报告。
 - `POST /api/v1/runs/:runId/steer`：普通补充之外支持`target`（运行中异议带目标提交）；同一clientMessageId不同内容或目标冲突。

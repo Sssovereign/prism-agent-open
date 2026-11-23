@@ -71,6 +71,32 @@ export interface CriterionEvaluation {
 export type ResearchObjectionTarget = { type: 'claim'; claimId: string } | { type: 'conclusion' };
 /** v2主持/汇总对用户异议的逐条回应；objectionId为服务端创建的异议研究记录ID。 */
 export interface ResearchObjectionResponse { objectionId: string; resolution: 'accepted' | 'rejected' | 'partial' | 'unresolved'; reason: string }
+/** 研究交付拒绝的安全诊断：只允许字段定位与摘要，不携带原始模型输出或资料正文。 */
+export type ResearchDeliveryCategory =
+  | 'json'
+  | 'required_field'
+  | 'field_shape'
+  | 'field_limit'
+  | 'identifier'
+  | 'citation'
+  | 'objection'
+  | 'verdict'
+  | 'criterion'
+  | 'disposition'
+  | 'blocking_item'
+  | 'phase_state';
+export interface ResearchDeliveryDiagnostic {
+  category: ResearchDeliveryCategory;
+  path?: string;
+  message: string;
+  expected?: string;
+  actualSummary?: string;
+  hint?: string;
+  repairable: boolean;
+  repairAttempt?: number;
+  maxRepairs?: number;
+}
+
 export interface ResearchSubmission {
   text: string;
   /** 发言摘要：v1所有角色可选（≤600字符）；v2主持与汇总须提供非空摘要。 */

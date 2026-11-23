@@ -18,7 +18,7 @@ import { resolveVisionSupport } from './modelCatalog.js';
 import { TicketRegistry } from './tickets.js';
 import { ModelRequestRegistry, LIMITS, type RequestKind } from './modelRequests.js';
 import type { ModelGatewayServer, FrozenModelBinding } from './gatewayServer.js';
-import { ChannelEndpoint, encodeFrame, type Frame } from './protocol.js';
+import { ChannelEndpoint, encodeFrame, type Frame, type FrameError } from './protocol.js';
 import { TOOL_SPECS, toolSpec, toolReadFile, toolReadImage, toolListDir, toolGrep, brokerWrite, toolWriteArtifact, toolReadArtifact, type ToolSpec } from './toolExec.js';
 import { fetchUrlText } from './webTools.js';
 import { executeBrowserTool, type DesktopBrowserHost } from './desktopBrowser.js';
@@ -711,7 +711,7 @@ export class Supervisor {
 
     // —— agent通道帧处理 ——
 
-    private async handleAgentFrame(active: ActiveRun, frame: Frame, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void): Promise<void> {
+    private async handleAgentFrame(active: ActiveRun, frame: Frame, respond: (ok: boolean, payload?: unknown, error?: FrameError) => void): Promise<void> {
         try {
             if(this.research.isResearch(active.runId) && !['ready','heartbeat','log','emit_event','complete_proposed','tool_proposed','model_request_proposed','run_failed'].includes(frame.method)) throw new ApiError('POLICY_DENIED','研究模式不继承其他视图的压缩或控制状态');
             switch (frame.method) {
@@ -821,11 +821,12 @@ export class Supervisor {
                 case 'run_failed': {
                     // runner结构化失败（模型错误经pi分类器归因，request回执后才退出）：采信code写入
                     // runs.stop_reason/attempts.error_code；code格式不符或run已非running时安全降级。
-                    const payload = frame.payload as { code?: string; message?: string; retryable?: boolean } | undefined;
+                    const payload = frame.payload as { code?: string; message?: string; retryable?: boolean; details?:Record<string,unknown> } | undefined;
                     const code = typeof payload?.code === 'string' && /^[A-Z][A-Z0-9_]{1,39}$/.test(payload.code) ? payload.code : 'RUNNER_EXITED';
                     const message = typeof payload?.message === 'string' && payload.message.trim() ? payload.message.slice(0, 400) : undefined;
                     this.failRunningRun(active.runId, active.attemptId, code, {
                         ...(message ? { message } : {}),
+                        ...(code==='DELIVERY_INVALID'&&payload?.details?{delivery:payload.details}:{}),
                         retryable: payload?.retryable === true,
                     });
                     respond(true, {});
@@ -836,7 +837,7 @@ export class Supervisor {
             }
         }
         catch (error) {
-            if (error instanceof ApiError) respond(false, undefined, { code: error.code, message: error.message });
+            if (error instanceof ApiError) respond(false, undefined, { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
             else respond(false, undefined, { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message.slice(0, 200) : '内部错误' });
         }
     }
@@ -893,7 +894,7 @@ export class Supervisor {
         return row.n > 0;
     }
 
-    private async handleToolProposed(active: ActiveRun, raw: unknown, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void): Promise<void> {
+    private async handleToolProposed(active: ActiveRun, raw: unknown, respond: (ok: boolean, payload?: unknown, error?: FrameError) => void): Promise<void> {
         const payload = raw as { toolName?: string; args?: Record<string, unknown>; parentInvocationId?: string; memoryOperationId?:string };
         if(this.research.isResearch(active.runId)){
             const requestedResearchTool = String(payload?.toolName ?? '');
@@ -1096,7 +1097,7 @@ export class Supervisor {
         pending.respond(false, undefined, { code: 'POLICY_DENIED', message: `用户拒绝了该操作：${reason.slice(0, 80) || 'APPROVAL_REJECTED'}` });
     }
 
-    private async executeClaimed(active: ActiveRun, invocationId: string, spec: { name: string; effect: string }, args: Record<string, unknown>, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void): Promise<void> {
+    private async executeClaimed(active: ActiveRun, invocationId: string, spec: { name: string; effect: string }, args: Record<string, unknown>, respond: (ok: boolean, payload?: unknown, error?: FrameError) => void): Promise<void> {
         const startedAt = Date.now();
         let result: unknown;
         try {
@@ -1297,15 +1298,24 @@ export class Supervisor {
         return {accepted:true,queued:true,duplicate};
     }
 
-    private async handleCompleteProposed(active: ActiveRun, raw: unknown, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void): Promise<void> {
+    private async handleCompleteProposed(active: ActiveRun, raw: unknown, respond: (ok: boolean, payload?: unknown, error?: FrameError) => void): Promise<void> {
         if(this.research.isResearch(active.runId)){
             const latest=this.db.db.prepare('SELECT state FROM model_requests WHERE attempt_id=? ORDER BY rowid DESC LIMIT 1').get(active.attemptId) as {state:string}|undefined;
-            if(latest?.state!=='completed')throw new ApiError('DELIVERY_INVALID','研究阶段必须有成功的模型请求才能提交');
-            let result;
             const proposal=String((raw as {summary?:unknown})?.summary??'');
-            try{result=this.research.complete(active.attemptId,proposal);}
+            let result;
+            try{
+                if(latest?.state!=='completed')throw new ApiError('DELIVERY_INVALID','研究阶段必须有成功的模型请求才能提交',{researchDelivery:{category:'phase_state',path:'model_request.state',message:'研究阶段必须有成功的模型请求才能提交',expected:'completed',hint:'等待模型请求成功后再提交完整JSON。',repairable:true}});
+                result=this.research.complete(active.attemptId,proposal);
+            }
             catch(error){
-                if(error instanceof ApiError&&error.code==='DELIVERY_INVALID')this.emit(active.runId,'research.delivery.rejected',{code:error.code,message:error.message,proposal:proposal.slice(0,50000),truncated:proposal.length>50000},'owner',active.attemptId);
+                if(error instanceof ApiError&&error.code==='DELIVERY_INVALID'){
+                    const rejectionCount=(this.db.db.prepare("SELECT COUNT(*) n FROM run_events WHERE run_id=? AND attempt_id=? AND type='research.delivery.rejected'").get(active.runId,active.attemptId) as {n:number}).n;
+                    const diagnostic=(error.details?.researchDelivery&&typeof error.details.researchDelivery==='object'?error.details.researchDelivery:{category:'field_shape',message:error.message,repairable:true}) as Record<string,unknown>;
+                    const details={researchDelivery:{...diagnostic,repairAttempt:Math.min(rejectionCount+1,2),maxRepairs:2}};
+                    this.emit(active.runId,'research.delivery.rejected',{code:error.code,message:error.message,details,proposal:proposal.slice(0,50000),truncated:proposal.length>50000},'owner',active.attemptId);
+                    respond(false,undefined,{code:error.code,message:error.message,details});
+                    return;
+                }
                 throw error;
             }
             active.status='finalizing';
@@ -1369,7 +1379,7 @@ export class Supervisor {
             setTimeout(() => this.cleanupProcessGroup(active, 'SIGTERM'), 3_000).unref?.();
         }
         catch (error) {
-            if (error instanceof ApiError) respond(false, undefined, { code: error.code, message: error.message });
+            if (error instanceof ApiError) respond(false, undefined, { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
             else respond(false, undefined, { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message.slice(0, 200) : '内部错误' });
         }
     }
@@ -1555,9 +1565,11 @@ export class Supervisor {
     }
 
     /** L2排期：次数凭run_events台账（source='supervisor'）持久计数，服务重启不丢；退避等半抖动防惊群。
-     * 研究任务不自动（阶段语义归research.retry）。 */
+     *  研究run同样纳入（2026-11-24放开）：仅白名单瞬态码（超时/传输错误）触发，fireAutoRetry经
+     *  retryFailedRun已分流到research.retry（只重跑失败phase、单主让位、状态漂移静默放弃）；
+     *  CREDENTIAL/quota/预算/DELIVERY等不可自愈类本就不在码白名单，陪审卡死教训不重演。 */
     private scheduleAutoRetry(runId: string, fromAttemptId: string, code: string): void {
-        if (this.stopping || !Supervisor.AUTO_RETRY_CODES.has(code) || this.research.isResearch(runId)) return;
+        if (this.stopping || !Supervisor.AUTO_RETRY_CODES.has(code)) return;
         const prior = this.db.db.prepare(`SELECT COUNT(*) AS n FROM run_events WHERE run_id=? AND type='run.retry_scheduled' AND json_extract(payload_json,'$.source')='supervisor'`).get(runId) as { n: number };
         if (prior.n >= Supervisor.AUTO_RETRY_MAX) return;
         const retry = prior.n + 1;

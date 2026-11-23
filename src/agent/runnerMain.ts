@@ -28,7 +28,7 @@ import {
     type AgentSessionEvent,
 } from '@earendil-works/pi-coding-agent';
 import { SandboxManager } from '@anthropic-ai/sandbox-runtime';
-import { ChannelEndpoint, type Frame } from './protocol.js';
+import { ChannelEndpoint, type Frame, type FrameError } from './protocol.js';
 import { TOOL_SPECS } from './toolExec.js';
 import { MEMORY_SELECTOR_PROMPT, MEMORY_EXTRACTION_PROMPT, selectedMemories } from './memoryPrompts.js';
 import type { MemoryExtractionContext } from '../../contracts/memory.js';
@@ -142,6 +142,7 @@ let lastCheckpointId = '';
 
 let lastModelError = '';
 let lastDeliveryError = '';
+let lastDeliveryDiagnostic: import('../../contracts/research.js').ResearchDeliveryDiagnostic | undefined;
 /** 结构化模型错误（stopReason==='error'时由pi分类器归因）；aborted不归因，走取消/旧路径。 */
 let lastModelFailure: ClassifiedModelError | null = null;
 let disposed = false;
@@ -686,7 +687,7 @@ async function main(): Promise<void> {
     });
 
     // exec通道处理（监督器→runner）
-    async function handleExecFrame(frame: Frame, respond: (ok: boolean, payload?: unknown, error?: { code: string; message: string }) => void): Promise<void> {
+    async function handleExecFrame(frame: Frame, respond: (ok: boolean, payload?: unknown, error?: FrameError) => void): Promise<void> {
         try {
             switch (frame.method) {
                 case 'execute_command': {
@@ -1092,10 +1093,10 @@ async function main(): Promise<void> {
             if (outcome === 'accepted') break;
             if(outcome==='repair'){
                 if(researchRepairs++>=2){
-                    try{await agentChannel.request('run_failed',{code:'DELIVERY_INVALID',message:lastDeliveryError,retryable:false},CONTROL_TIMEOUT_MS);}catch{/* exit handler persists failure */}
+                    try{await agentChannel.request('run_failed',{code:'DELIVERY_INVALID',message:lastDeliveryError,retryable:false,details:lastDeliveryDiagnostic?{researchDelivery:{...lastDeliveryDiagnostic,repairAttempt:researchRepairs,maxRepairs:2}}:undefined},CONTROL_TIMEOUT_MS);}catch{/* exit handler persists failure */}
                     fail('研究输出在两次格式修复后仍未通过校验',1);
                 }
-                await session.prompt(boot.promptVersion===RESEARCH_PROMPT_VERSION?researchRepairPrompt(lastDeliveryError):`平台结构校验未通过：${lastDeliveryError}。请在相同研究输入和权限下修正最终JSON，保留有依据的分析。回应只能复制已提供主张的完整id，不要使用记录ID或角色名；不确定的回应可删除，不能编造引文。必须保留text、claims、limitations；陪审必须有合法verdict，主持仍须逐项处理所有已有主张。`);
+                await session.prompt(boot.promptVersion===RESEARCH_PROMPT_VERSION?researchRepairPrompt(lastDeliveryDiagnostic??lastDeliveryError):`平台结构校验未通过：${lastDeliveryError}。请在相同研究输入和权限下修正最终JSON，保留有依据的分析。回应只能复制已提供主张的完整id，不要使用记录ID或角色名；不确定的回应可删除，不能编造引文。必须保留text、claims、limitations；陪审必须有合法verdict，主持仍须逐项处理所有已有主张。`);
                 continue;
             }
             if (outcome === 'rejected') fail('完成提议被监督器拒绝', 1);
@@ -1123,7 +1124,7 @@ async function proposeCompletion(summary: string): Promise<'accepted' | 'deferre
     catch (error) {
         const code = error instanceof Error && 'code' in error ? String((error as { code?: unknown }).code) : '';
         if (code === 'DEFERRED_BY_USER_INPUT' || code === 'REQUEST_IN_PROGRESS') return 'deferred';
-        if(boot.research&&code==='DELIVERY_INVALID'){lastDeliveryError=error instanceof Error?error.message.slice(0,400):'研究输出字段无效';return 'repair';}
+        if(boot.research&&code==='DELIVERY_INVALID'){lastDeliveryError=error instanceof Error?error.message.slice(0,400):'研究输出字段无效';const details=error instanceof ApiError?error.details?.researchDelivery:undefined;lastDeliveryDiagnostic=details&&typeof details==='object'?details as import('../../contracts/research.js').ResearchDeliveryDiagnostic:undefined;return 'repair';}
         if(boot.research){try{await agentChannel.request('run_failed',{code:code||'DELIVERY_INVALID',message:error instanceof Error?error.message.slice(0,300):'研究输出不符合契约',retryable:false},CONTROL_TIMEOUT_MS);}catch{/* exit handler preserves failure */}}
         emitEvent('run.complete_rejected', { message: error instanceof Error ? error.message.slice(0, 300) : 'unknown' });
         return 'rejected';
